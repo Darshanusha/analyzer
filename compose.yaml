@@ -1,0 +1,167 @@
+name: stock-analyzer
+
+services:
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-17}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-analyzer}
+      POSTGRES_USER: ${POSTGRES_USER:-analyzer}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-analyzer-local}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  analyzer-api:
+    profiles: ["containerized-app"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-analyzer}
+      DATABASE_USERNAME: ${POSTGRES_USER:-analyzer}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-analyzer-local}
+      DEPLOYMENT_ENVIRONMENT: local-docker
+      OTEL_TRACING_ENDPOINT: http://tempo:4318/v1/traces
+      TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-1.0}
+      SHARADAR_API_KEY: ${SHARADAR_API_KEY:-}
+      BENZINGA_API_KEY: ${BENZINGA_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_CHAT_PROVIDER: ${OPENAI_CHAT_PROVIDER:-none}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-mini}
+      LLM_FORECAST_ENABLED: ${LLM_FORECAST_ENABLED:-false}
+      LLM_FORECAST_PROMPT_VERSION: ${LLM_FORECAST_PROMPT_VERSION:-llm-next-session-v2}
+      LLM_WEB_RESEARCH_ENABLED: ${LLM_WEB_RESEARCH_ENABLED:-false}
+      OPENAI_WEB_SEARCH_MODEL: ${OPENAI_WEB_SEARCH_MODEL:-gpt-5.5}
+      LLM_WEB_RESEARCH_MAX_REQUESTS: ${LLM_WEB_RESEARCH_MAX_REQUESTS:-1}
+      LLM_WEB_RESEARCH_ALLOWED_DOMAINS: ${LLM_WEB_RESEARCH_ALLOWED_DOMAINS:-sec.gov,data.sec.gov,federalreserve.gov,bls.gov,bea.gov}
+      LLM_WEB_RESEARCH_CATEGORIES: ${LLM_WEB_RESEARCH_CATEGORIES:-NEWS,REGULATORY,COMPANY_EVENT,EARNINGS,MACRO}
+      PREDICTION_MODEL_PATH: /model-artifacts/champion.json
+    ports:
+      - "${ANALYZER_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      tempo:
+        condition: service_started
+    volumes:
+      - ./model-artifacts:/model-artifacts:ro
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8080/actuator/health/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  model-trainer:
+    profiles: ["training"]
+    build:
+      context: ./model-trainer
+      dockerfile: Dockerfile
+    environment:
+      TRAINING_DATABASE_URL: postgresql://${POSTGRES_USER:-analyzer}:${POSTGRES_PASSWORD:-analyzer-local}@postgres:5432/${POSTGRES_DB:-analyzer}
+      MODEL_ARTIFACT_DIR: /artifacts
+      TRAINING_MIN_ROWS: ${TRAINING_MIN_ROWS:-2000}
+      TRAINING_MIN_SYMBOLS: ${TRAINING_MIN_SYMBOLS:-3}
+    volumes:
+      - ./model-artifacts:/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:${PROMETHEUS_VERSION:-v3.5.0}
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-90d}
+      - --web.enable-lifecycle
+      - --enable-feature=exemplar-storage
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  tempo:
+    image: grafana/tempo:${TEMPO_VERSION:-2.8.2}
+    command: ["-config.file=/etc/tempo/tempo.yml"]
+    ports:
+      - "${TEMPO_HTTP_PORT:-3200}:3200"
+      - "${OTLP_GRPC_PORT:-4317}:4317"
+      - "${OTLP_HTTP_PORT:-4318}:4318"
+    volumes:
+      - ./docker/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo-data:/var/tempo
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:${LOKI_VERSION:-3.5.3}
+    command: ["-config.file=/etc/loki/loki.yml"]
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    volumes:
+      - ./docker/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:${ALLOY_VERSION:-v1.10.2}
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    ports:
+      - "${ALLOY_PORT:-12345}:12345"
+    volumes:
+      - ./docker/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - alloy-data:/var/lib/alloy/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:${GRAFANA_VERSION:-12.1.1}
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --spider http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  prometheus-data:
+  tempo-data:
+  loki-data:
+  alloy-data:
+  grafana-data:

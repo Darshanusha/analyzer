@@ -1,0 +1,127 @@
+spring:
+  application:
+    name: analyzer
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/analyzer}
+    username: ${DATABASE_USERNAME:analyzer}
+    password: ${DATABASE_PASSWORD:analyzer-local}
+    hikari:
+      maximum-pool-size: ${DATABASE_MAX_POOL_SIZE:10}
+      minimum-idle: ${DATABASE_MIN_IDLE:1}
+      connection-timeout: ${DATABASE_CONNECTION_TIMEOUT:1000}
+      validation-timeout: 2000
+  flyway:
+    enabled: true
+    default-schema: analyzer
+    schemas: analyzer
+    locations: classpath:db/migration
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_schema: analyzer
+        jdbc:
+          time_zone: UTC
+  jackson:
+    default-property-inclusion: non_null
+  ai:
+    model:
+      chat: ${OPENAI_CHAT_PROVIDER:none}
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      timeout: ${OPENAI_TIMEOUT:200s}
+      max-retries: ${OPENAI_MAX_RETRIES:2}
+      chat:
+        options:
+          model: ${OPENAI_MODEL:gpt-5-mini}
+          temperature: 0.1
+          store: false
+
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+  error:
+    include-message: never
+    include-stacktrace: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,flyway
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: ${HEALTH_SHOW_DETAILS:always}
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  otlp:
+    metrics:
+      export:
+        enabled: ${OTLP_METRICS_ENABLED:false}
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
+  opentelemetry:
+    resource-attributes:
+      service.name: ${spring.application.name}
+      service.namespace: stock-analysis
+      deployment.environment: ${DEPLOYMENT_ENVIRONMENT:local}
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_TRACING_ENDPOINT:http://localhost:4318/v1/traces}
+
+logging:
+  structured:
+    format:
+      console: ecs
+  level:
+    root: INFO
+    com.stock.analyzer: ${APP_LOG_LEVEL:INFO}
+
+info:
+  application:
+    name: ${spring.application.name}
+    description: Explainable AI-assisted stock market analyzer
+
+providers:
+  sharadar:
+    base-url: ${SHARADAR_BASE_URL:https://api.sharadar.com/v1.0}
+    api-key: ${SHARADAR_API_KEY:}
+  benzinga:
+    base-url: ${BENZINGA_BASE_URL:https://api.benzinga.com}
+    api-key: ${BENZINGA_API_KEY:}
+
+analysis:
+  history-years: ${ANALYSIS_HISTORY_YEARS:10}
+  news-lookback-days: ${ANALYSIS_NEWS_LOOKBACK_DAYS:30}
+  default-wait-seconds: ${ANALYSIS_DEFAULT_WAIT_SECONDS:60}
+  max-wait-seconds: ${ANALYSIS_MAX_WAIT_SECONDS:120}
+  llm-forecast:
+    enabled: ${LLM_FORECAST_ENABLED:false}
+    prompt-version: ${LLM_FORECAST_PROMPT_VERSION:llm-next-session-v2}
+    up-threshold: ${LLM_FORECAST_UP_THRESHOLD:55}
+    down-threshold: ${LLM_FORECAST_DOWN_THRESHOLD:45}
+    web-research:
+      enabled: ${LLM_WEB_RESEARCH_ENABLED:false}
+      base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
+      api-key: ${OPENAI_API_KEY:}
+      model: ${OPENAI_WEB_SEARCH_MODEL:gpt-5.5}
+      max-requests-per-forecast: ${LLM_WEB_RESEARCH_MAX_REQUESTS:1}
+      max-summary-characters: ${LLM_WEB_RESEARCH_MAX_SUMMARY_CHARACTERS:6000}
+      allowed-domains: ${LLM_WEB_RESEARCH_ALLOWED_DOMAINS:sec.gov,data.sec.gov,federalreserve.gov,bls.gov,bea.gov}
+      searchable-categories: ${LLM_WEB_RESEARCH_CATEGORIES:NEWS,REGULATORY,COMPANY_EVENT,EARNINGS,MACRO}
+
+prediction:
+  model-path: ${PREDICTION_MODEL_PATH:./model-artifacts/champion.json}
+  decision-threshold: ${PREDICTION_DECISION_THRESHOLD:0.5}
