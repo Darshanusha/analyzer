@@ -24,6 +24,7 @@ import com.stock.analyzer.configuration.LlmForecastProperties;
 import com.stock.analyzer.forecast.domain.BatchLlmRankingItem;
 import com.stock.analyzer.forecast.domain.BatchLlmRankingResponse;
 import com.stock.analyzer.forecast.domain.LlmForecastCall;
+import com.stock.analyzer.forecast.domain.LlmCandidateFilterDecision;
 import com.stock.analyzer.forecast.domain.LlmInformationGapSummary;
 import com.stock.analyzer.forecast.domain.LlmInformationRequest;
 import com.stock.analyzer.forecast.domain.LlmInformationRequestAudit;
@@ -32,6 +33,7 @@ import com.stock.analyzer.forecast.domain.LlmForecastPerformanceSummary;
 import com.stock.analyzer.forecast.domain.LlmForecastResult;
 import com.stock.analyzer.forecast.domain.LlmWebResearchResult;
 import com.stock.analyzer.instrument.domain.Instrument;
+import com.stock.analyzer.prediction.application.UsMarketCalendar;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,6 +57,7 @@ public class LlmForecastService {
 			"(?i)(bearer|api[_-]?key|token)(\\s*[=:]\\s*|\\s+)([^&\\s,\\\"}]+)");
 
 	private final LlmForecastClient client;
+	private final LlmCandidateFilter candidateFilter;
 	private final LlmWebResearchClient webResearchClient;
 	private final LlmForecastRepository repository;
 	private final LlmInformationGapRepository gapRepository;
@@ -66,15 +69,25 @@ public class LlmForecastService {
 	@Autowired
 	public LlmForecastService(LlmForecastClient client, LlmWebResearchClient webResearchClient,
 			LlmForecastRepository repository, LlmInformationGapRepository gapRepository,
-			LlmForecastProperties properties, ObjectMapper objectMapper, MeterRegistry meterRegistry) {
-		this(client, webResearchClient, repository, gapRepository, properties, objectMapper, meterRegistry,
+			LlmForecastProperties properties, LlmCandidateFilter candidateFilter,
+			ObjectMapper objectMapper, MeterRegistry meterRegistry) {
+		this(client, webResearchClient, repository, gapRepository, properties, candidateFilter, objectMapper, meterRegistry,
 				Clock.systemUTC());
 	}
 
 	LlmForecastService(LlmForecastClient client, LlmWebResearchClient webResearchClient,
 			LlmForecastRepository repository, LlmInformationGapRepository gapRepository,
 			LlmForecastProperties properties, ObjectMapper objectMapper, MeterRegistry meterRegistry, Clock clock) {
+		this(client, webResearchClient, repository, gapRepository, properties, new LlmCandidateFilter(properties),
+				objectMapper, meterRegistry, clock);
+	}
+
+	LlmForecastService(LlmForecastClient client, LlmWebResearchClient webResearchClient,
+			LlmForecastRepository repository, LlmInformationGapRepository gapRepository,
+			LlmForecastProperties properties, LlmCandidateFilter candidateFilter,
+			ObjectMapper objectMapper, MeterRegistry meterRegistry, Clock clock) {
 		this.client = client;
+		this.candidateFilter = candidateFilter;
 		this.webResearchClient = webResearchClient;
 		this.repository = repository;
 		this.gapRepository = gapRepository;
@@ -87,12 +100,27 @@ public class LlmForecastService {
 
 	public LlmForecastResult forecast(UUID analysisRunId, Instrument instrument, LocalDate cutoffDate,
 			LocalDate targetSession, String dataQualityStatus, List<AnalysisComponentResult> components) {
+		return forecast(analysisRunId, instrument, cutoffDate, targetSession, dataQualityStatus, components, false);
+	}
+
+	public LlmForecastResult forecast(UUID analysisRunId, Instrument instrument, LocalDate cutoffDate,
+			LocalDate targetSession, String dataQualityStatus, List<AnalysisComponentResult> components,
+			boolean filterEnabled) {
 		long started = System.nanoTime();
 		UUID forecastId = UUID.randomUUID();
 		Instant informationCutoff = Instant.now(clock);
 		repository.resolveOutcomes(instrument.id());
 		Map<String, Object> snapshot = inputSnapshot(instrument, cutoffDate, targetSession,
 				dataQualityStatus, components, informationCutoff);
+		LlmCandidateFilterDecision filterDecision = filterEnabled ? candidateFilter.evaluate(components) : null;
+		meterRegistry.counter("stock.analysis.llm.filter", "enabled", Boolean.toString(filterEnabled),
+				"outcome", filterDecision == null ? "bypassed" : (filterDecision.eligible() ? "passed" : "filtered"))
+				.increment();
+		if (filterDecision != null) {
+			Map<String, Object> filteredSnapshot = new LinkedHashMap<>(snapshot);
+			filteredSnapshot.put("javaCandidateFilter", filterSnapshot(filterDecision));
+			snapshot = Collections.unmodifiableMap(filteredSnapshot);
+		}
 		String inputJson = json(snapshot);
 		String inputSha256 = sha256(inputJson);
 
@@ -111,9 +139,19 @@ public class LlmForecastService {
 					"INSUFFICIENT_DATA", "The deterministic data-quality check is insufficient",
 					inputSha256, started), snapshot, started);
 		}
+		if (filterDecision != null && !filterDecision.eligible()) {
+			String message = "Java candidate filter excluded the stock from the LLM call: "
+					+ String.join("; ", filterDecision.reasons());
+			log.info("LLM forecast filtered out before OpenAI call: analysisRunId={}, symbol={}, method={}, positiveSignals={}, technicalSignals={}",
+					analysisRunId, instrument.symbol(), filterDecision.method(), filterDecision.positiveSignalCount(),
+					filterDecision.technicalSignalCount());
+			return save(skipped(forecastId, analysisRunId, instrument, cutoffDate, targetSession, "FILTERED_OUT",
+					"JAVA_CANDIDATE_FILTER", message, inputSha256, started), snapshot, started);
+		}
 
 		try {
 			LlmForecastCall firstCall = client.forecast(inputJson);
+			repository.saveInteractions(analysisRunId, firstCall.interactions());
 			List<LlmInformationRequestAudit> audits = new ArrayList<>();
 			List<Map<String, Object>> webEvidence = researchRequests(forecastId, analysisRunId, instrument,
 					cutoffDate, informationCutoff, firstCall.output().informationRequests(), audits);
@@ -136,10 +174,25 @@ public class LlmForecastService {
 					clean(output.bullishEvidence()), clean(output.bearishEvidence()), clean(output.risks()),
 					clean(output.dataLimitations()), SCORE_INTERPRETATION, "OPENAI", call.model(),
 					properties.getPromptVersion(), inputSha256, call.inputTokens(), call.outputTokens(), call.totalTokens(),
-					elapsedMillis(started), null, null, Instant.now(clock), null);
+					elapsedMillis(started), null, null, Instant.now(clock), null, 1, informationCutoff);
 			log.info("LLM forecast completed: analysisRunId={}, symbol={}, direction={}, upScore={}, confidence={}, model={}",
 					analysisRunId, instrument.symbol(), direction, output.upScore(), output.confidence(), call.model());
 			LlmForecastResult saved = save(result, snapshot, started);
+			for (var horizon : call.forecasts()) {
+				if (horizon.horizonTradingSessions() == 1) continue;
+				LlmForecastOutput value = validate(horizon.asForecastOutput());
+				int sessions = horizon.horizonTradingSessions();
+				LlmForecastResult additional = new LlmForecastResult(UUID.randomUUID(), analysisRunId,
+						instrument.id(), instrument.symbol(), cutoffDate,
+						new UsMarketCalendar().addTradingSessions(cutoffDate, sessions), "AVAILABLE",
+						direction(value.upScore()), value.upScore(), value.confidence().toUpperCase(Locale.ROOT),
+						clean(value.thesis(), 1_000), clean(value.bullishEvidence()), clean(value.bearishEvidence()),
+						clean(value.risks()), clean(value.dataLimitations()), SCORE_INTERPRETATION, "OPENAI",
+						call.model(), properties.getPromptVersion(), inputSha256, call.inputTokens(), call.outputTokens(),
+						call.totalTokens(), elapsedMillis(started), null, null, Instant.now(clock), null,
+						sessions, informationCutoff);
+				save(additional, snapshot, started);
+			}
 			recordAudits(audits);
 			return saved;
 		}
@@ -153,16 +206,38 @@ public class LlmForecastService {
 		}
 	}
 
+	private Map<String, Object> filterSnapshot(LlmCandidateFilterDecision decision) {
+		Map<String, Object> value = new LinkedHashMap<>();
+		value.put("enabled", true);
+		value.put("eligible", decision.eligible());
+		value.put("method", decision.method());
+		value.put("positiveSignalCount", decision.positiveSignalCount());
+		value.put("technicalSignalCount", decision.technicalSignalCount());
+		if (decision.probabilityUp() != null) value.put("probabilityUp", decision.probabilityUp());
+		value.put("reasons", decision.reasons());
+		return Collections.unmodifiableMap(value);
+	}
+
 	public List<LlmForecastResult> history(String symbol, int limit) {
 		String normalized = symbol == null ? "" : symbol.strip().toUpperCase(Locale.ROOT);
 		return repository.findBySymbol(normalized, Math.max(1, Math.min(limit, 100)));
 	}
 
-	public BatchLlmRankingResponse rankings(UUID batchAnalysisId, String batchStatus) {
-		List<BatchLlmRankingItem> rankings = repository.findBatchRankings(batchAnalysisId);
+	public List<LlmForecastResult> forAnalysisRun(UUID analysisRunId) {
+		return repository.findByAnalysisRun(analysisRunId);
+	}
+
+	public BatchLlmRankingResponse rankings(UUID batchAnalysisId, String batchStatus, int horizon) {
+		if (horizon != 1 && horizon != 5) throw new ApiException(HttpStatus.BAD_REQUEST,
+				"INVALID_FORECAST_HORIZON", "horizon must be 1 or 5 trading sessions");
+		List<BatchLlmRankingItem> rankings = repository.findBatchRankings(batchAnalysisId, horizon);
 		return new BatchLlmRankingResponse(batchAnalysisId, batchStatus, SCORE_INTERPRETATION,
 				"Experimental research ranking only; the score is not a calibrated probability or a recommendation to buy.",
 				rankings);
+	}
+
+	public BatchLlmRankingResponse rankings(UUID batchAnalysisId, String batchStatus) {
+		return rankings(batchAnalysisId, batchStatus, 1);
 	}
 
 	public LlmForecastPerformanceSummary performanceSummary() {
@@ -199,6 +274,9 @@ public class LlmForecastService {
 		meterRegistry.counter("stock.analysis.llm.forecast", "status", result.status()).increment();
 		meterRegistry.timer("stock.analysis.llm.forecast.duration", "status", result.status())
 				.record(System.nanoTime() - started, TimeUnit.NANOSECONDS);
+		if (result.upScore() != null) meterRegistry.summary("stock.analysis.llm.up.score",
+				"horizon", Integer.toString(result.horizonTradingSessions()), "direction", result.direction())
+				.record(result.upScore());
 		return result;
 	}
 
@@ -215,6 +293,7 @@ public class LlmForecastService {
 			String dataQualityStatus, List<AnalysisComponentResult> components, Instant informationCutoff) {
 		Map<String, Object> snapshot = new LinkedHashMap<>();
 		snapshot.put("schemaVersion", 2);
+		snapshot.put("instrumentId", instrument.id());
 		snapshot.put("symbol", instrument.symbol());
 		snapshot.put("companyName", instrument.name());
 		snapshot.put("sector", instrument.sector());
@@ -320,7 +399,9 @@ public class LlmForecastService {
 
 	private LlmForecastCall combine(LlmForecastCall first, LlmForecastCall second) {
 		return new LlmForecastCall(second.output(), second.model(), add(first.inputTokens(), second.inputTokens()),
-				add(first.outputTokens(), second.outputTokens()), add(first.totalTokens(), second.totalTokens()));
+				add(first.outputTokens(), second.outputTokens()), add(first.totalTokens(), second.totalTokens()),
+				second.forecasts(), java.util.stream.Stream.concat(first.interactions().stream(),
+						second.interactions().stream()).toList());
 	}
 
 	private Long add(Long first, Long second) {

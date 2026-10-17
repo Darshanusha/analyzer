@@ -10,6 +10,7 @@ public record BatchAnalysisState(
 		int completedItems,
 		int successfulItems,
 		int failedItems,
+		boolean filter,
 		Instant createdAt,
 		Instant completedAt) {
 }

@@ -1,6 +1,7 @@
 package com.stock.analyzer.analysis.application;
 
 import java.time.LocalDate;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -27,6 +28,8 @@ public interface AnalysisRunRepository {
 	void fail(UUID analysisRunId, String errorCode, String errorMessage, long durationMs);
 
 	Optional<AnalysisRunState> find(UUID analysisRunId);
+
+	Optional<AnalysisRunState> findCompletedForDay(UUID instrumentId, Instant dayStart, Instant nextDayStart);
 
 	List<AnalysisRunState> findBySymbol(String symbol, int limit);
 }

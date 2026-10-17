@@ -2,6 +2,7 @@ package com.stock.analyzer;
 
 import java.time.LocalDate;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.TimeZone;
@@ -16,9 +17,18 @@ import com.stock.analyzer.batch.application.BatchAnalysisRepository;
 import com.stock.analyzer.forecast.application.LlmForecastRepository;
 import com.stock.analyzer.forecast.application.LlmForecastService;
 import com.stock.analyzer.forecast.application.LlmInformationGapRepository;
+import com.stock.analyzer.forecast.application.LlmSelectionRepository;
+import com.stock.analyzer.forecast.domain.AiInteractionAudit;
+import com.stock.analyzer.forecast.domain.AiToolCallAudit;
 import com.stock.analyzer.forecast.domain.LlmInformationRequest;
 import com.stock.analyzer.forecast.domain.LlmInformationRequestAudit;
 import com.stock.analyzer.forecast.domain.LlmForecastResult;
+import com.stock.analyzer.forecast.domain.LlmSelectionCall;
+import com.stock.analyzer.forecast.domain.LlmSelectionCandidateResult;
+import com.stock.analyzer.forecast.domain.LlmSelectionOutput;
+import com.stock.analyzer.forecast.domain.LlmSelectionOutputCandidate;
+import com.stock.analyzer.forecast.domain.LlmSelectionWebResearch;
+import com.stock.analyzer.forecast.domain.LlmWebSource;
 import com.stock.analyzer.instrument.application.InstrumentRepository;
 import com.stock.analyzer.instrument.domain.InstrumentProfile;
 import com.stock.analyzer.news.domain.NewsArticle;
@@ -78,6 +88,9 @@ class AnalyzerApplicationIT {
 	@Autowired
 	private LlmInformationGapRepository llmInformationGapRepository;
 
+	@Autowired
+	private LlmSelectionRepository llmSelectionRepository;
+
 	@Test
 	void contextLoadsAndRunsFoundationMigration() {
 		Integer metadataRows = jdbcTemplate.queryForObject(
@@ -108,6 +121,15 @@ class AnalyzerApplicationIT {
 				                     'llm_information_gap', 'llm_information_request')
 				""", Integer.class);
 		assertThat(llmForecastTables).isEqualTo(4);
+
+		Integer llmSelectionTables = jdbcTemplate.queryForObject("""
+				SELECT COUNT(*) FROM information_schema.tables
+				WHERE table_schema = 'analyzer'
+				  AND table_name IN ('llm_selection_run', 'llm_selection_candidate',
+				                     'llm_selection_interaction', 'llm_selection_tool_call',
+				                     'llm_selection_web_research')
+				""", Integer.class);
+		assertThat(llmSelectionTables).isEqualTo(5);
 	}
 
 	@Test
@@ -145,6 +167,11 @@ class AnalyzerApplicationIT {
 
 		assertThat(stored).isPresent();
 		assertThat(stored.orElseThrow().report()).isEqualTo(report);
+		LocalDate completionDate = LocalDate.now(ZoneOffset.UTC);
+		assertThat(analysisRunRepository.findCompletedForDay(instrument.id(),
+				completionDate.atStartOfDay(ZoneOffset.UTC).toInstant(),
+				completionDate.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant()))
+				.get().extracting(state -> state.analysisRunId()).isEqualTo(runId);
 		assertThat(analysisDataRepository.loadPeers(instrument.id(), "Technology", null,
 				LocalDate.of(2026, 10, 2))).isEmpty();
 	}
@@ -161,17 +188,22 @@ class AnalyzerApplicationIT {
 		assertThat(analysisDataRepository.loadNews(instrument.id(), article.publishedAt().minusSeconds(1)))
 				.extracting(NewsArticle::providerArticleId).contains(article.providerArticleId());
 
-		UUID batchId = batchAnalysisRepository.create(List.of("AAPL", "MSFT"));
+		UUID batchId = batchAnalysisRepository.create(List.of("AAPL", "MSFT"), false);
 		batchAnalysisRepository.markRunning(batchId);
 		UUID runId = analysisRunRepository.create(instrument, "AAPL");
 		batchAnalysisRepository.linkAnalysis(batchId, "AAPL", runId);
-		batchAnalysisRepository.completeItem(batchId, "AAPL");
+		batchAnalysisRepository.completeItem(batchId, "AAPL", true);
 		batchAnalysisRepository.failItem(batchId, "MSFT", "INSTRUMENT_NOT_FOUND", "Not found");
 		batchAnalysisRepository.refreshSummary(batchId, true);
 
-		assertThat(batchAnalysisRepository.find(batchId).orElseThrow().status()).isEqualTo("PARTIAL_SUCCESS");
+		assertThat(batchAnalysisRepository.find(batchId).orElseThrow()).satisfies(batch -> {
+			assertThat(batch.status()).isEqualTo("PARTIAL_SUCCESS");
+			assertThat(batch.filter()).isFalse();
+		});
 		assertThat(batchAnalysisRepository.findItems(batchId)).extracting(item -> item.status())
 				.containsExactlyInAnyOrder("COMPLETED", "FAILED");
+		assertThat(batchAnalysisRepository.findItems(batchId)).filteredOn(item -> "AAPL".equals(item.symbol()))
+				.singleElement().satisfies(item -> assertThat(item.reusedExistingAnalysis()).isTrue());
 	}
 
 	@Test
@@ -246,14 +278,22 @@ class AnalyzerApplicationIT {
 		var forecast = new LlmForecastResult(UUID.randomUUID(), runId, instrument.id(), "AAPL", cutoff, target,
 				"AVAILABLE", "UP", 68, "MEDIUM", "Evidence favors an upward close",
 				List.of("Positive momentum"), List.of("High valuation"), List.of("Unexpected news"), List.of(),
-				LlmForecastService.SCORE_INTERPRETATION, "OPENAI", "test-model", "llm-next-session-v1",
+				LlmForecastService.SCORE_INTERPRETATION, "OPENAI", "test-model", "llm-next-session-v2",
 				"b".repeat(64), 100L, 50L, 150L, 25L, null, null, Instant.now(), null);
 		llmForecastRepository.save(forecast, Map.of("symbol", "AAPL", "cutoffDate", cutoff.toString()));
+		Map<String, Object> storedIdentity = jdbcTemplate.queryForMap("""
+				SELECT symbol, stock_name
+				FROM analyzer.llm_forecast
+				WHERE id = ?
+				""", forecast.forecastId());
+		assertThat(storedIdentity).containsEntry("symbol", "AAPL")
+				.containsEntry("stock_name", "APPLE INC");
 		String gapFingerprint = "c".repeat(64);
+		String preferredSourceType = "s".repeat(100);
 		llmInformationGapRepository.record(new LlmInformationRequestAudit(UUID.randomUUID(), forecast.forecastId(),
 				runId, instrument.id(), "AAPL", cutoff,
 				new LlmInformationRequest("OPTIONS", "Thirty-day implied volatility",
-						"May affect the next session", "MEDIUM", "OPTIONS_PROVIDER", ""),
+						"May affect the next session", "MEDIUM", preferredSourceType, ""),
 				gapFingerprint, "NOT_SEARCHABLE", null, Instant.now()));
 
 		assertThat(llmForecastRepository.findBatchRankings(batchId)).singleElement().satisfies(item -> {
@@ -270,11 +310,44 @@ class AnalyzerApplicationIT {
 		assertThat(llmInformationGapRepository.find("NEW", 10)).anySatisfy(gap -> {
 			assertThat(gap.fingerprint()).isEqualTo(gapFingerprint);
 			assertThat(gap.occurrenceCount()).isEqualTo(1);
+			assertThat(gap.preferredSourceType()).isEqualTo(preferredSourceType);
 		});
 		assertThat(llmInformationGapRepository.update(gapFingerprint, "PLANNED", "Evaluate provider"))
 				.isTrue();
 		assertThat(llmInformationGapRepository.find("PLANNED", 10)).singleElement()
 				.satisfies(gap -> assertThat(gap.resolutionNotes()).isEqualTo("Evaluate provider"));
+
+		UUID selectionId = llmSelectionRepository.create(batchId, 1, 15, 1,
+				"selection-model", "llm-top-candidate-selection-v2+web-test");
+		llmSelectionRepository.markRunning(selectionId);
+		var candidate = llmSelectionRepository.loadCandidates(batchId, 1, 15).getFirst();
+		var selected = new LlmSelectionOutputCandidate(1, "AAPL", 70, "MEDIUM", "Best relative evidence",
+				List.of("Momentum"), List.of("Valuation"), List.of("Relative strength"),
+				List.of("Unexpected news"), List.of());
+		var output = new LlmSelectionOutput(List.of(selected), List.of(), List.of("Market risk"), List.of());
+		var source = new LlmWebSource("https://www.sec.gov/example", "SEC filing", "sec.gov");
+		var research = new LlmSelectionWebResearch("AAPL", forecast.informationCutoff(), "AVAILABLE",
+				"resp-web", "selection-model", "No adverse filing found", List.of(source),
+				100L, 20L, 120L, 50L, 1, null, null);
+		var tool = new AiToolCallAudit("resp-web", "WEB_SEARCH", "web_search", "AVAILABLE",
+				50L, 1, "d".repeat(64), null, null);
+		var interaction = new AiInteractionAudit("resp-web", "selection-model", 1, "AVAILABLE",
+				100L, 20L, 120L, 50L, 0, 1, null, null, List.of(tool));
+		var call = new LlmSelectionCall(output, "selection-model", 100L, 20L, 120L,
+				List.of(interaction), List.of(research), Map.of("candidateSymbols", List.of("AAPL")));
+		var selectedResult = new LlmSelectionCandidateResult(candidate.forecastId(), "AAPL", 1, 68,
+				"MEDIUM", true, 1, 70, "MEDIUM", "Best relative evidence", List.of("Momentum"),
+				List.of("Valuation"), List.of("Relative strength"), List.of("Unexpected news"), List.of(), null);
+		llmSelectionRepository.complete(selectionId, call.inputSnapshot(), "e".repeat(64), call,
+				List.of(selectedResult), 100L);
+
+		assertThat(llmSelectionRepository.find(selectionId)).get().satisfies(selection -> {
+			assertThat(selection.status()).isEqualTo("COMPLETED");
+			assertThat(selection.webResearch()).singleElement().satisfies(stored -> {
+				assertThat(stored.symbol()).isEqualTo("AAPL");
+				assertThat(stored.sources()).containsExactly(source);
+			});
+		});
 	}
 
 	private InstrumentProfile appleProfile() {

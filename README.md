@@ -340,7 +340,10 @@ Spring AI will be used where AI provides real value:
 - Producing a schema-constrained experimental next-session forecast
 - Ranking forecasts produced by the same prompt and model version
 
-The model will receive a curated context rather than all raw historical data. Stable instructions and prompt templates will be versioned. Every invocation will record the provider, model, prompt version, token usage, duration, outcome, and trace ID.
+The model will receive a curated context rather than all raw historical data. Stable instructions and prompt templates
+are versioned under `src/main/resources/prompts/{prompt-version}.txt`; the configured prompt version must have a matching
+resource or application startup fails closed. Every invocation records the provider, model, prompt version, token usage,
+duration, outcome, and trace ID.
 
 The forecast may also return structured `informationRequests[]` when a specific missing fact could materially change
 the assessment. The application records every request in an information-gap backlog. When explicitly enabled, one
@@ -448,11 +451,17 @@ Idempotency-Key: unique-request-id
 {
   "symbol": "AAPL",
   "waitForCompletion": true,
-  "maximumWaitSeconds": 60
+  "maximumWaitSeconds": 60,
+  "forceReanalysis": false,
+  "filter": true
 }
 ```
 
 If processing completes within the waiting period, the API returns `200 OK` with the complete analysis. If it takes longer, it returns `202 Accepted` with an `analysisRunId` and continues in the background.
+By default, a completed successful analysis for the same stock on the current UTC date is reused. Send
+`forceReanalysis: true` to create a new run. Reused single-stock responses include `X-Analysis-Reused: true`.
+The `filter` flag defaults to `true`. Java evaluates the deterministic evidence before any OpenAI forecast call;
+set `filter: false` to bypass that candidate gate.
 
 ```http
 GET /api/v1/analyses/{analysisRunId}
@@ -468,7 +477,7 @@ GET /api/v1/instruments/{symbol}/predictions
 ### Analyze a CSV batch
 
 ```http
-POST /api/v1/batches
+POST /api/v1/batches?forceReanalysis=false&filter=true
 Content-Type: multipart/form-data
 ```
 
@@ -482,6 +491,8 @@ NVDA
 ```
 
 CSV processing is asynchronous, deduplicates symbols, processes stocks independently, and permits partial success.
+With the default `filter=true`, every stock still receives deterministic analysis, but only Java-qualified candidates
+are sent to the LLM. Use `filter=false` when every successfully analyzed stock must be sent to the LLM.
 
 ```http
 GET /api/v1/batches/{batchAnalysisId}
@@ -782,10 +793,13 @@ An LLM `upScore` is deliberately not placed in `probabilityUp`. It is an uncalib
 not a statistical probability or a trade recommendation. `probabilityUp` remains reserved for a separately evaluated,
 calibrated model. The application records every LLM forecast and resolves its outcome after a later EOD bar arrives.
 
-Web research is separately opt-in. It is disabled by default and is limited to one approved request per forecast.
-The initial allowlist contains SEC and U.S. macroeconomic authority domains. Unsupported requests (for example options
-or short-interest data without an approved provider) are not silently discarded: they are stored in PostgreSQL with an
-occurrence count so frequently requested integrations can be prioritized.
+Web research is separately opt-in and disabled by default. The local `get_recent_news` database tool is also disabled
+by default because an empty news store gives the model no useful evidence. While that tool is disabled, the model may
+make up to five hosted web-search calls per forecast. If local news is enabled later, hosted search is limited to one
+call so the model prefers the point-in-time data already stored by the application. The initial web allowlist contains
+SEC and U.S. macroeconomic authority domains. Unsupported requests (for example options or short-interest data without
+an approved provider) are not silently discarded: they are stored in PostgreSQL with an occurrence count so frequently
+requested integrations can be prioritized.
 
 Phase 2 probability-baseline infrastructure is implemented:
 
@@ -831,33 +845,43 @@ To enable the experimental OpenAI forecast, add these IntelliJ environment varia
 ```text
 OPENAI_CHAT_PROVIDER=openai
 OPENAI_API_KEY=<your key>
-OPENAI_MODEL=gpt-5-mini
+OPENAI_MODEL=gpt-6.1-sol
 LLM_FORECAST_ENABLED=true
+LLM_FILTER_PROBABILITY_THRESHOLD=0.50
+LLM_FILTER_MINIMUM_POSITIVE_SIGNALS=3
+LLM_FILTER_MINIMUM_TECHNICAL_SIGNALS=1
 ```
 
-To permit one controlled web-research round, also configure:
+To permit controlled web research while keeping the empty local-news tool hidden, also configure:
 
 ```text
-LLM_FORECAST_PROMPT_VERSION=llm-next-session-v2
+LLM_FORECAST_PROMPT_VERSION=llm-multi-horizon-v4
+LLM_RECENT_NEWS_TOOL_ENABLED=false
+LLM_MAX_DATABASE_TOOL_CALLS=5
 LLM_WEB_RESEARCH_ENABLED=true
 OPENAI_WEB_SEARCH_MODEL=gpt-5.5
-LLM_WEB_RESEARCH_MAX_REQUESTS=1
+LLM_WEB_RESEARCH_REASONING_EFFORT=low
+LLM_WEB_RESEARCH_CONNECT_TIMEOUT=10s
+LLM_WEB_RESEARCH_READ_TIMEOUT=180s
+LLM_WEB_RESEARCH_MAX_REQUESTS=5
 LLM_WEB_RESEARCH_ALLOWED_DOMAINS=sec.gov,data.sec.gov,federalreserve.gov,bls.gov,bea.gov
 LLM_WEB_RESEARCH_CATEGORIES=NEWS,REGULATORY,COMPANY_EVENT,EARNINGS,MACRO
 ```
 
 Keep the API key in environment variables, never VM arguments, source files, or committed `.env` files. OpenAI calls
-use structured output and `store=false`. With web research disabled, one completed stock analysis makes one forecast
-call. When a stock requests approved web evidence, it may make one web-search request and one additional forecast call.
-The existing sequential batch processor avoids a sudden rate-limit burst, but web research can materially increase
-latency and cost for large batches.
+use structured output and `store=false`. The model may request at most five database function calls. With
+`LLM_RECENT_NEWS_TOOL_ENABLED=false`, `get_recent_news` is not exposed and up to five hosted web-search calls are
+available. Setting the flag to `true` exposes stored news and reduces hosted web search to at most one call. These are
+upper bounds: the model may use fewer calls when the supplied evidence is sufficient. The existing sequential batch
+processor avoids a sudden rate-limit burst, but web research can materially increase latency and cost for large
+batches. Web research has its own configurable connection and read timeouts.
 
 ### Analyze one stock
 
 ```powershell
 curl.exe -X POST "http://localhost:8080/api/v1/analyses" `
   -H "Content-Type: application/json" `
-  -d '{"symbol":"AAPL","waitForCompletion":true,"maximumWaitSeconds":60}'
+  -d '{"symbol":"AAPL","waitForCompletion":true,"maximumWaitSeconds":60,"forceReanalysis":false,"filter":true}'
 ```
 
 The response is `200 OK` with the full report if it completes within the requested wait. Otherwise it is
@@ -868,6 +892,10 @@ curl.exe "http://localhost:8080/api/v1/analyses/{analysisRunId}"
 ```
 
 History is available at `GET /api/v1/instruments/AAPL/analyses`.
+The default call reuses the latest completed analysis from the current UTC date. To deliberately run the providers and
+LLM again, set `"forceReanalysis": true`. The response header `X-Analysis-Reused` indicates which path was used.
+`filter` defaults to `true`. When enabled, Java applies the same candidate screen used by CSV batches before OpenAI is
+called. Set `"filter": false` to send the stock to the LLM regardless of its deterministic candidate score.
 
 ### Analyze a CSV
 
@@ -883,7 +911,29 @@ NVDA
 Submit it asynchronously:
 
 ```powershell
-curl.exe -X POST "http://localhost:8080/api/v1/batches" -F "file=@stocks.csv"
+curl.exe -X POST "http://localhost:8080/api/v1/batches?filter=true" -F "file=@stocks.csv"
+```
+
+Batch processing also reuses today's successful analyses by default. Each item reports
+`reusedExistingAnalysis: true` when reused. The batch response records the selected `filter` value, and each item
+reports `llmForecastStatus`; stocks rejected by Java have `FILTERED_OUT` and are not sent to OpenAI.
+
+The default Java filter first uses `probabilityUp >= 0.50` when a promoted compatible Java model is available.
+Otherwise it requires at least three positive deterministic signals, including at least one technical signal. Signals
+currently cover price versus SMA20/SMA50, positive 20-session return, positive relative strength versus SPY/sector,
+positive revenue/net-income growth, and positive-versus-negative news keyword counts. The thresholds are configurable
+through the `LLM_FILTER_*` environment variables above; this is a cost/coverage gate, not a buy recommendation.
+
+To force every CSV symbol through a new analysis while retaining the Java screen, call:
+
+```powershell
+curl.exe -X POST "http://localhost:8080/api/v1/batches?forceReanalysis=true" -F "file=@stocks.csv"
+```
+
+To bypass Java filtering and send every successfully analyzed stock to the LLM, call:
+
+```powershell
+curl.exe -X POST "http://localhost:8080/api/v1/batches?filter=false" -F "file=@stocks.csv"
 ```
 
 Use `GET /api/v1/batches/{batchAnalysisId}` for totals and
@@ -898,6 +948,64 @@ curl.exe "http://localhost:8080/api/v1/batches/{batchAnalysisId}/llm-rankings"
 The ranking response declares `scoreType` as
 `UNCALIBRATED_LLM_UP_SCORE_0_TO_100_NOT_A_PROBABILITY_OR_TRADE_RECOMMENDATION`. A score of 50 means balanced evidence;
 scores of 55 or higher map to `UP`, scores of 45 or lower map to `DOWN`, and the middle range maps to `UNCERTAIN`.
+
+### Ask a second LLM call to select the strongest candidates
+
+After a batch has reached a terminal state, the application can take the highest-scoring forecasts for one horizon and
+run a separate comparative LLM analysis. This call uses its own `LLM_SELECTION_*` configuration, prompt, model,
+token metrics, database-tool budget, persistence tables, and API result. By default it compares the top 15 available
+candidates and returns exactly three selections. The comparative `selectionScore` is not a calibrated probability or a
+trade recommendation.
+
+Enable and configure it in IntelliJ VM options:
+
+```text
+-DLLM_SELECTION_ENABLED=true
+-DLLM_SELECTION_MODEL=gpt-6.1-sol
+-DLLM_SELECTION_REASONING_EFFORT=medium
+-DLLM_SELECTION_PROMPT_VERSION=llm-top-candidate-selection-v2
+-DLLM_SELECTION_CANDIDATE_LIMIT=15
+-DLLM_SELECTION_RESULT_LIMIT=3
+-DLLM_SELECTION_MAX_DATABASE_TOOL_CALLS=12
+-DLLM_SELECTION_MAX_ROUNDS=14
+-DLLM_SELECTION_WEB_RESEARCH_ENABLED=true
+-DLLM_SELECTION_WEB_RESEARCH_REQUIRED=true
+-DLLM_SELECTION_WEB_RESEARCH_MAX_REQUESTS=15
+-DLLM_SELECTION_WEB_RESEARCH_MODEL=gpt-6.1-sol
+-DLLM_SELECTION_WEB_RESEARCH_REASONING_EFFORT=low
+-DLLM_SELECTION_WEB_RESEARCH_ALLOWED_DOMAINS=sec.gov,data.sec.gov,reuters.com,nasdaq.com,nyse.com,federalreserve.gov,bls.gov,bea.gov
+```
+
+It uses the existing `OPENAI_API_KEY`. The first forecast call continues to use `OPENAI_MODEL`; the second comparative
+call uses `LLM_SELECTION_MODEL`.
+
+Run the five-session comparison:
+
+```powershell
+curl.exe -X POST "http://localhost:8080/api/v1/batches/{batchAnalysisId}/llm-selections" `
+  -H "Content-Type: application/json" `
+  -d '{"horizonTradingSessions":5,"waitForCompletion":true,"maximumWaitSeconds":120,"forceReselection":false}'
+```
+
+The default behavior reuses a completed selection for the same batch, horizon, limits, model, and prompt version. Set
+`forceReselection` to `true` to create a new immutable selection run. A request made while the batch is still queued or
+running returns a conflict instead of ranking partial results. If the HTTP request returns `202 Accepted`, poll:
+
+```powershell
+curl.exe "http://localhost:8080/api/v1/llm-selections/{selectionId}"
+```
+
+The selector requests one bounded hosted web-search response for every candidate, so the default top-15 comparison can
+make up to 15 web-research requests before the final top-three ranking. Searches are sequential to avoid a rate-limit
+burst, use the candidate's original information cutoff to prevent look-ahead leakage, and are restricted to configured
+trusted domains. A failed search is recorded as a limitation and does not become negative stock evidence. Every source
+URL returned by OpenAI is post-validated against the same domain allowlist.
+
+The selector can also request additional point-in-time price, fundamental, market, and sector data only for symbols in
+the candidate set. It cannot run arbitrary SQL. PostgreSQL stores the run in `llm_selection_run`, every compared symbol
+in `llm_selection_candidate`, each OpenAI round in `llm_selection_interaction`, every database or web tool call in
+`llm_selection_tool_call`, and per-symbol search summaries, sources, tokens, latency, and failures in
+`llm_selection_web_research`.
 Do not select a purchase solely because an item is ranked first. Compare the ranking with data quality, bearish evidence,
 news coverage, liquidity, valuation, and the recorded forward performance of the unchanged prompt version.
 
@@ -1011,6 +1119,34 @@ docker compose --profile containerized-app up --build -d
 | Analyzer health | `http://localhost:8080/actuator/health` |
 | Analyzer metrics | `http://localhost:8080/actuator/prometheus` |
 | Grafana | `http://localhost:3000` |
+
+### Multi-horizon Responses workflow
+
+The current LLM workflow uses the OpenAI Responses API with `store=false`. One stateless conversation produces both
+the 1-session and 5-session assessments. The application replays typed response items and function outputs between
+rounds; OpenAI does not retain the conversation for the application. Both values are uncalibrated comparative
+`upScore` values, not probabilities. The five-session target is whether the close after exactly five completed U.S.
+trading sessions is above the analysis-cutoff close.
+
+The model can make at most five calls to the read-only database tools (`get_available_stock_data`, `get_price_history`,
+`get_fundamental_history`, `get_market_context`, and `get_sector_context`). `get_recent_news` is added only when
+`LLM_RECENT_NEWS_TOOL_ENABLED=true`. When it is disabled and web research is enabled, the model can make up to five
+hosted web-search calls restricted to the configured domain allowlist. Enabling the local-news tool reduces hosted web
+search to one call. Tool inputs are schema constrained, row limited, and fixed to the analyzed instrument and
+information cutoff. Arbitrary SQL and arbitrary HTTP access are not exposed.
+
+The response retains `llmForecast` as the one-session result and adds `llmForecasts` containing both horizons. Batch
+rankings default to one session; select the five-session ranking with:
+
+```text
+GET /api/v1/batches/{batchAnalysisId}/llm-rankings?horizon=5
+```
+
+PostgreSQL stores one `llm_forecast` row per analysis and horizon. `ai_interaction` stores every successful Responses
+round and its token/latency totals; `ai_tool_call` stores each database or web-search tool call, status, duration, and
+bounded result count. Prometheus exposes OpenAI tokens, response counts and latency, tool counts and latency, filter
+outcomes, forecast score distributions, and batch outcomes. Grafana's Application Overview dashboard includes panels
+for token use, DB/web tool calls, p50/p95/p99 response latency, tool latency, and batch results.
 | Prometheus | `http://localhost:9090` |
 | Tempo | `http://localhost:3200` |
 | Loki | `http://localhost:3100/ready` |

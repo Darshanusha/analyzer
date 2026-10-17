@@ -38,9 +38,10 @@ public class LlmForecastController {
 	}
 
 	@GetMapping("/batches/{batchAnalysisId}/llm-rankings")
-	public BatchLlmRankingResponse rankings(@PathVariable UUID batchAnalysisId) {
+	public BatchLlmRankingResponse rankings(@PathVariable UUID batchAnalysisId,
+			@RequestParam(defaultValue = "1") int horizon) {
 		BatchAnalysisState batch = batchAnalysisService.get(batchAnalysisId);
-		return forecastService.rankings(batchAnalysisId, batch.status());
+		return forecastService.rankings(batchAnalysisId, batch.status(), horizon);
 	}
 
 	@GetMapping("/llm-forecasts/performance")

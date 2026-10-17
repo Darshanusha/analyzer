@@ -35,8 +35,8 @@ spring:
       max-retries: ${OPENAI_MAX_RETRIES:2}
       chat:
         options:
-          model: ${OPENAI_MODEL:gpt-5-mini}
-          temperature: 0.1
+          model: ${OPENAI_MODEL:gpt-6.1-sol}
+          #temperature: 0.1
           store: false
 
 server:
@@ -64,6 +64,16 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        stock.analysis.ai.response.duration: true
+        stock.analysis.ai.tool.duration: true
+        stock.analysis.llm.forecast.duration: true
+        stock.analysis.llm.selection.duration: true
+        stock.analysis.llm.selection.response.duration: true
+        stock.analysis.llm.selection.tool.duration: true
+        stock.analysis.llm.selection.web.research.duration: true
+        stock.analysis.step.duration: true
   otlp:
     metrics:
       export:
@@ -109,18 +119,49 @@ analysis:
   max-wait-seconds: ${ANALYSIS_MAX_WAIT_SECONDS:120}
   llm-forecast:
     enabled: ${LLM_FORECAST_ENABLED:false}
-    prompt-version: ${LLM_FORECAST_PROMPT_VERSION:llm-next-session-v2}
+    prompt-version: ${LLM_FORECAST_PROMPT_VERSION:llm-multi-horizon-v4}
     up-threshold: ${LLM_FORECAST_UP_THRESHOLD:55}
     down-threshold: ${LLM_FORECAST_DOWN_THRESHOLD:45}
+    recent-news-tool-enabled: ${LLM_RECENT_NEWS_TOOL_ENABLED:false}
+    max-database-tool-calls: ${LLM_MAX_DATABASE_TOOL_CALLS:5}
+    candidate-filter:
+      probability-threshold: ${LLM_FILTER_PROBABILITY_THRESHOLD:0.50}
+      minimum-positive-signals: ${LLM_FILTER_MINIMUM_POSITIVE_SIGNALS:3}
+      minimum-technical-signals: ${LLM_FILTER_MINIMUM_TECHNICAL_SIGNALS:1}
     web-research:
       enabled: ${LLM_WEB_RESEARCH_ENABLED:false}
       base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
       api-key: ${OPENAI_API_KEY:}
       model: ${OPENAI_WEB_SEARCH_MODEL:gpt-5.5}
-      max-requests-per-forecast: ${LLM_WEB_RESEARCH_MAX_REQUESTS:1}
+      reasoning-effort: ${LLM_WEB_RESEARCH_REASONING_EFFORT:low}
+      connect-timeout: ${LLM_WEB_RESEARCH_CONNECT_TIMEOUT:10s}
+      read-timeout: ${LLM_WEB_RESEARCH_READ_TIMEOUT:180s}
+      max-requests-per-forecast: ${LLM_WEB_RESEARCH_MAX_REQUESTS:5}
       max-summary-characters: ${LLM_WEB_RESEARCH_MAX_SUMMARY_CHARACTERS:6000}
       allowed-domains: ${LLM_WEB_RESEARCH_ALLOWED_DOMAINS:sec.gov,data.sec.gov,federalreserve.gov,bls.gov,bea.gov}
       searchable-categories: ${LLM_WEB_RESEARCH_CATEGORIES:NEWS,REGULATORY,COMPANY_EVENT,EARNINGS,MACRO}
+  llm-selection:
+    enabled: ${LLM_SELECTION_ENABLED:false}
+    model: ${LLM_SELECTION_MODEL:gpt-6.1-sol}
+    reasoning-effort: ${LLM_SELECTION_REASONING_EFFORT:medium}
+    prompt-version: ${LLM_SELECTION_PROMPT_VERSION:llm-top-candidate-selection-v2}
+    candidate-limit: ${LLM_SELECTION_CANDIDATE_LIMIT:15}
+    selection-limit: ${LLM_SELECTION_RESULT_LIMIT:3}
+    max-database-tool-calls: ${LLM_SELECTION_MAX_DATABASE_TOOL_CALLS:12}
+    max-rounds: ${LLM_SELECTION_MAX_ROUNDS:14}
+    web-research-enabled: ${LLM_SELECTION_WEB_RESEARCH_ENABLED:true}
+    web-research-required: ${LLM_SELECTION_WEB_RESEARCH_REQUIRED:true}
+    web-research-max-requests: ${LLM_SELECTION_WEB_RESEARCH_MAX_REQUESTS:15}
+    web-research-model: ${LLM_SELECTION_WEB_RESEARCH_MODEL:gpt-6.1-sol}
+    web-research-reasoning-effort: ${LLM_SELECTION_WEB_RESEARCH_REASONING_EFFORT:low}
+    web-research-allowed-domains: ${LLM_SELECTION_WEB_RESEARCH_ALLOWED_DOMAINS:sec.gov,data.sec.gov,reuters.com,nasdaq.com,nyse.com,federalreserve.gov,bls.gov,bea.gov}
+    web-research-max-summary-characters: ${LLM_SELECTION_WEB_RESEARCH_MAX_SUMMARY_CHARACTERS:4000}
+    default-wait-seconds: ${LLM_SELECTION_DEFAULT_WAIT_SECONDS:60}
+    max-wait-seconds: ${LLM_SELECTION_MAX_WAIT_SECONDS:120}
+    base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
+    api-key: ${OPENAI_API_KEY:}
+    connect-timeout: ${LLM_SELECTION_CONNECT_TIMEOUT:10s}
+    read-timeout: ${LLM_SELECTION_READ_TIMEOUT:180s}
 
 prediction:
   model-path: ${PREDICTION_MODEL_PATH:./model-artifacts/champion.json}

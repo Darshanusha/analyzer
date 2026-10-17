@@ -53,6 +53,114 @@
       "targets": [{ "expr": "hikaricp_connections{application=\"analyzer\"}", "legendFormat": "{{pool}} {{state}}", "refId": "A" }],
       "title": "Database Connection Pool",
       "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 17 },
+      "id": 6,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } },
+      "targets": [{ "expr": "sum(increase(stock_analysis_ai_tokens_total{application=\"analyzer\"}[$__range])) by (type, model)", "legendFormat": "{{model}} {{type}}", "refId": "A" }],
+      "title": "OpenAI Tokens Used",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 17 },
+      "id": 7,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true } },
+      "targets": [{ "expr": "sum(increase(stock_analysis_ai_tool_calls_total{application=\"analyzer\"}[$__range])) by (type, tool, status)", "legendFormat": "{{type}} {{tool}} {{status}}", "refId": "A" }],
+      "title": "LLM Tool Calls (DB and Web)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 17 },
+      "id": 8,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(stock_analysis_ai_response_duration_seconds_bucket{application=\"analyzer\"}[5m])) by (le, model))", "legendFormat": "p50 {{model}}", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, sum(rate(stock_analysis_ai_response_duration_seconds_bucket{application=\"analyzer\"}[5m])) by (le, model))", "legendFormat": "p95 {{model}}", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, sum(rate(stock_analysis_ai_response_duration_seconds_bucket{application=\"analyzer\"}[5m])) by (le, model))", "legendFormat": "p99 {{model}}", "refId": "C" }
+      ],
+      "title": "OpenAI Response Latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 25 },
+      "id": 9,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true } },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(stock_analysis_ai_tool_duration_seconds_bucket{application=\"analyzer\"}[5m])) by (le, type, tool))", "legendFormat": "{{type}} {{tool}}", "refId": "A" }],
+      "title": "Tool p95 Duration",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 25 },
+      "id": 10,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } },
+      "targets": [{ "expr": "sum(increase(stock_analysis_batch_items_total{application=\"analyzer\"}[$__range])) by (outcome)", "legendFormat": "{{outcome}}", "refId": "A" }],
+      "title": "Batch Outcomes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 33 },
+      "id": 11,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true } },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(stock_analysis_step_duration_seconds_bucket{application=\"analyzer\"}[5m])) by (le, step))", "legendFormat": "{{step}}", "refId": "A" }],
+      "title": "Analysis Step p95 Duration",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 41 },
+      "id": 12,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true } },
+      "targets": [{ "expr": "sum(increase(stock_analysis_ai_errors_total{application=\"analyzer\"}[$__range])) by (model, type)", "legendFormat": "{{model}} {{type}}", "refId": "A" }],
+      "title": "OpenAI Errors and Timeouts",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 49 },
+      "id": 13,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true } },
+      "targets": [{ "expr": "sum(increase(stock_analysis_llm_selection_tokens_total{application=\"analyzer\"}[$__range])) by (type, model)", "legendFormat": "{{model}} {{type}}", "refId": "A" }],
+      "title": "Selection LLM Tokens",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 49 },
+      "id": 14,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true } },
+      "targets": [{ "expr": "sum(increase(stock_analysis_llm_selection_tool_calls_total{application=\"analyzer\"}[$__range])) by (tool, status)", "legendFormat": "{{tool}} {{status}}", "refId": "A" }],
+      "title": "Selection DB and Web Tool Calls",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 49 },
+      "id": 15,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true } },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(stock_analysis_llm_selection_response_duration_seconds_bucket{application=\"analyzer\"}[5m])) by (le, model))", "legendFormat": "response p95 {{model}}", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, sum(rate(stock_analysis_llm_selection_tool_duration_seconds_bucket{application=\"analyzer\"}[5m])) by (le, tool))", "legendFormat": "DB tool p95 {{tool}}", "refId": "B" },
+        { "expr": "histogram_quantile(0.95, sum(rate(stock_analysis_llm_selection_web_research_duration_seconds_bucket{application=\"analyzer\"}[5m])) by (le, status))", "legendFormat": "web research p95 {{status}}", "refId": "C" }
+      ],
+      "title": "Selection LLM and Tool p95",
+      "type": "timeseries"
     }
   ],
   "refresh": "15s",

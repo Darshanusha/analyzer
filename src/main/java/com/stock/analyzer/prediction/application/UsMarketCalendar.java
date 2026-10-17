@@ -16,6 +16,13 @@ public class UsMarketCalendar {
 		return candidate;
 	}
 
+	public LocalDate addTradingSessions(LocalDate date, int sessions) {
+		if (sessions < 1) throw new IllegalArgumentException("sessions must be positive");
+		LocalDate result = date;
+		for (int i = 0; i < sessions; i++) result = nextTradingSession(result);
+		return result;
+	}
+
 	boolean isRegularTradingDay(LocalDate date) {
 		DayOfWeek day = date.getDayOfWeek();
 		if (day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY) return false;

@@ -26,12 +26,12 @@ public class PostgresBatchAnalysisRepository implements BatchAnalysisRepository 
 
 	@Override
 	@Transactional
-	public UUID create(List<String> symbols) {
+	public UUID create(List<String> symbols, boolean filter) {
 		UUID batchId = UUID.randomUUID();
 		jdbcClient.sql("""
-				INSERT INTO analyzer.batch_analysis (id, status, total_items)
-				VALUES (:id, 'QUEUED', :total)
-				""").param("id", batchId).param("total", symbols.size()).update();
+				INSERT INTO analyzer.batch_analysis (id, status, total_items, filter_enabled)
+				VALUES (:id, 'QUEUED', :total, :filter)
+				""").param("id", batchId).param("total", symbols.size()).param("filter", filter).update();
 		for (String symbol : symbols) {
 			jdbcClient.sql("""
 					INSERT INTO analyzer.batch_analysis_item (id, batch_analysis_id, symbol, status)
@@ -57,12 +57,14 @@ public class PostgresBatchAnalysisRepository implements BatchAnalysisRepository 
 	}
 
 	@Override
-	public void completeItem(UUID batchAnalysisId, String symbol) {
+	public void completeItem(UUID batchAnalysisId, String symbol, boolean reusedExistingAnalysis) {
 		jdbcClient.sql("""
 				UPDATE analyzer.batch_analysis_item
-				SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP
+				SET status = 'COMPLETED', reused_existing_analysis = :reused,
+				    completed_at = CURRENT_TIMESTAMP
 				WHERE batch_analysis_id = :batchId AND symbol = :symbol
-				""").param("batchId", batchAnalysisId).param("symbol", symbol).update();
+				""").param("reused", reusedExistingAnalysis)
+					.param("batchId", batchAnalysisId).param("symbol", symbol).update();
 	}
 
 	@Override
@@ -99,7 +101,7 @@ public class PostgresBatchAnalysisRepository implements BatchAnalysisRepository 
 	@Override
 	public Optional<BatchAnalysisState> find(UUID batchAnalysisId) {
 		return jdbcClient.sql("""
-				SELECT id, status, total_items, completed_items, successful_items, failed_items,
+				SELECT id, status, total_items, completed_items, successful_items, failed_items, filter_enabled,
 				       created_at, completed_at
 				FROM analyzer.batch_analysis WHERE id = :id
 				""").param("id", batchAnalysisId).query(this::mapBatch).optional();
@@ -108,20 +110,26 @@ public class PostgresBatchAnalysisRepository implements BatchAnalysisRepository 
 	@Override
 	public List<BatchAnalysisItemState> findItems(UUID batchAnalysisId) {
 		return jdbcClient.sql("""
-				SELECT id, symbol, status, analysis_run_id, error_code, error_message, created_at, completed_at
-				FROM analyzer.batch_analysis_item WHERE batch_analysis_id = :id ORDER BY created_at, symbol
+				SELECT item.id, item.symbol, item.status, item.analysis_run_id, item.reused_existing_analysis,
+				       forecast.status AS llm_forecast_status,
+				       item.error_code, item.error_message, item.created_at, item.completed_at
+				FROM analyzer.batch_analysis_item item
+				LEFT JOIN analyzer.llm_forecast forecast ON forecast.analysis_run_id = item.analysis_run_id
+				WHERE item.batch_analysis_id = :id ORDER BY item.created_at, item.symbol
 				""").param("id", batchAnalysisId).query(this::mapItem).list();
 	}
 
 	private BatchAnalysisState mapBatch(ResultSet rs, int row) throws SQLException {
 		return new BatchAnalysisState(rs.getObject("id", UUID.class), rs.getString("status"),
 				rs.getInt("total_items"), rs.getInt("completed_items"), rs.getInt("successful_items"),
-				rs.getInt("failed_items"), instant(rs, "created_at"), instant(rs, "completed_at"));
+				rs.getInt("failed_items"), rs.getBoolean("filter_enabled"),
+				instant(rs, "created_at"), instant(rs, "completed_at"));
 	}
 
 	private BatchAnalysisItemState mapItem(ResultSet rs, int row) throws SQLException {
 		return new BatchAnalysisItemState(rs.getObject("id", UUID.class), rs.getString("symbol"),
-				rs.getString("status"), rs.getObject("analysis_run_id", UUID.class), rs.getString("error_code"),
+				rs.getString("status"), rs.getObject("analysis_run_id", UUID.class),
+				rs.getBoolean("reused_existing_analysis"), rs.getString("llm_forecast_status"), rs.getString("error_code"),
 				rs.getString("error_message"), instant(rs, "created_at"), instant(rs, "completed_at"));
 	}
 

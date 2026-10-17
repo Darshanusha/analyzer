@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
@@ -39,9 +40,11 @@ public class BatchAnalysisController {
 	}
 
 	@PostMapping
-	public ResponseEntity<BatchAnalysisState> create(@RequestPart("file") MultipartFile file) {
+	public ResponseEntity<BatchAnalysisState> create(@RequestPart("file") MultipartFile file,
+			@RequestParam(defaultValue = "false") boolean forceReanalysis,
+			@RequestParam(defaultValue = "true") boolean filter) {
 		List<String> symbols = parse(file);
-		return ResponseEntity.accepted().body(service.submit(symbols));
+		return ResponseEntity.accepted().body(service.submit(symbols, forceReanalysis, filter));
 	}
 
 	@GetMapping("/{batchAnalysisId}")

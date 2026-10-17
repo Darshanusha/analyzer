@@ -1,5 +1,6 @@
 package com.stock.analyzer.configuration;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -9,9 +10,12 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class LlmForecastProperties {
 
 	private boolean enabled;
-	private String promptVersion = "llm-next-session-v1";
+	private String promptVersion = "llm-multi-horizon-v4";
 	private int upThreshold = 55;
 	private int downThreshold = 45;
+	private boolean recentNewsToolEnabled;
+	private int maxDatabaseToolCalls = 5;
+	private final CandidateFilter candidateFilter = new CandidateFilter();
 	private final WebResearch webResearch = new WebResearch();
 
 	public boolean isEnabled() {
@@ -42,6 +46,10 @@ public class LlmForecastProperties {
 		return downThreshold;
 	}
 
+	public CandidateFilter getCandidateFilter() {
+		return candidateFilter;
+	}
+
 	public void setDownThreshold(int downThreshold) {
 		this.downThreshold = downThreshold;
 	}
@@ -50,13 +58,63 @@ public class LlmForecastProperties {
 		return webResearch;
 	}
 
+	public boolean isRecentNewsToolEnabled() {
+		return recentNewsToolEnabled;
+	}
+
+	public void setRecentNewsToolEnabled(boolean recentNewsToolEnabled) {
+		this.recentNewsToolEnabled = recentNewsToolEnabled;
+	}
+
+	public int getMaxDatabaseToolCalls() {
+		return maxDatabaseToolCalls;
+	}
+
+	public void setMaxDatabaseToolCalls(int maxDatabaseToolCalls) {
+		this.maxDatabaseToolCalls = maxDatabaseToolCalls;
+	}
+
+	public static class CandidateFilter {
+
+		private double probabilityThreshold = 0.50;
+		private int minimumPositiveSignals = 3;
+		private int minimumTechnicalSignals = 1;
+
+		public double getProbabilityThreshold() {
+			return probabilityThreshold;
+		}
+
+		public void setProbabilityThreshold(double probabilityThreshold) {
+			this.probabilityThreshold = probabilityThreshold;
+		}
+
+		public int getMinimumPositiveSignals() {
+			return minimumPositiveSignals;
+		}
+
+		public void setMinimumPositiveSignals(int minimumPositiveSignals) {
+			this.minimumPositiveSignals = minimumPositiveSignals;
+		}
+
+		public int getMinimumTechnicalSignals() {
+			return minimumTechnicalSignals;
+		}
+
+		public void setMinimumTechnicalSignals(int minimumTechnicalSignals) {
+			this.minimumTechnicalSignals = minimumTechnicalSignals;
+		}
+	}
+
 	public static class WebResearch {
 
 		private boolean enabled;
 		private String baseUrl = "https://api.openai.com/v1";
 		private String apiKey = "";
 		private String model = "gpt-5.5";
-		private int maxRequestsPerForecast = 1;
+		private String reasoningEffort = "low";
+		private Duration connectTimeout = Duration.ofSeconds(10);
+		private Duration readTimeout = Duration.ofSeconds(180);
+		private int maxRequestsPerForecast = 5;
 		private int maxSummaryCharacters = 6_000;
 		private List<String> allowedDomains = new ArrayList<>(List.of(
 				"sec.gov", "data.sec.gov", "federalreserve.gov", "bls.gov", "bea.gov"));
@@ -93,6 +151,30 @@ public class LlmForecastProperties {
 
 		public void setModel(String model) {
 			this.model = model;
+		}
+
+		public String getReasoningEffort() {
+			return reasoningEffort;
+		}
+
+		public void setReasoningEffort(String reasoningEffort) {
+			this.reasoningEffort = reasoningEffort;
+		}
+
+		public Duration getConnectTimeout() {
+			return connectTimeout;
+		}
+
+		public void setConnectTimeout(Duration connectTimeout) {
+			this.connectTimeout = connectTimeout;
+		}
+
+		public Duration getReadTimeout() {
+			return readTimeout;
+		}
+
+		public void setReadTimeout(Duration readTimeout) {
+			this.readTimeout = readTimeout;
 		}
 
 		public int getMaxRequestsPerForecast() {

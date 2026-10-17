@@ -8,6 +8,8 @@ public record BatchAnalysisItemState(
 		String symbol,
 		String status,
 		UUID analysisRunId,
+		boolean reusedExistingAnalysis,
+		String llmForecastStatus,
 		String errorCode,
 		String errorMessage,
 		Instant createdAt,

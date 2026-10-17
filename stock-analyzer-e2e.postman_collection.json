@@ -1,0 +1,278 @@
+{
+  "info": {
+    "_postman_id": "9dc56e4d-a052-4ee7-a5a6-25ea94560254",
+    "name": "AI Stock Analyzer - Ordered End-to-End Workflow",
+    "description": "Ordered workflow: health check, CSV batch analysis, batch polling, five-session ranking, and the second-stage top-15 research/top-3 selection. Run with Postman's Collection Runner. The collection saves batchAnalysisId and selectionId automatically.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080", "type": "string" },
+    { "key": "batchAnalysisId", "value": "", "type": "string" },
+    { "key": "selectionId", "value": "", "type": "string" },
+    { "key": "filter", "value": "true", "type": "string" },
+    { "key": "forceReanalysis", "value": "false", "type": "string" },
+    { "key": "forceReselection", "value": "true", "type": "string" },
+    { "key": "horizonTradingSessions", "value": "5", "type": "string" },
+    { "key": "pollDelayMs", "value": "3000", "type": "string" },
+    { "key": "maximumBatchPolls", "value": "600", "type": "string" },
+    { "key": "maximumSelectionPolls", "value": "300", "type": "string" },
+    { "key": "batchPollCount", "value": "0", "type": "string" },
+    { "key": "selectionPollCount", "value": "0", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "00 - Application health",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Application is healthy', function () {",
+              "    pm.response.to.have.status(200);",
+              "    const body = pm.response.json();",
+              "    pm.expect(body.status).to.eql('UP');",
+              "});",
+              "pm.execution.setNextRequest('01 - Submit filtered CSV batch');"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/actuator/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["actuator", "health"]
+        },
+        "description": "Confirms that the Spring application and its required health contributors are available."
+      }
+    },
+    {
+      "name": "01 - Submit filtered CSV batch",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Batch was accepted', function () { pm.expect(pm.response.code).to.eql(202); });",
+              "const body = pm.response.json();",
+              "pm.test('Response contains batchAnalysisId', function () { pm.expect(body.batchAnalysisId).to.be.a('string').and.not.empty; });",
+              "pm.collectionVariables.set('batchAnalysisId', body.batchAnalysisId);",
+              "pm.collectionVariables.set('batchPollCount', '0');",
+              "console.log('Created batchAnalysisId=' + body.batchAnalysisId);",
+              "pm.execution.setNextRequest('02 - Poll batch until complete');"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "file",
+              "type": "file",
+              "src": "postman/sample-50-stocks.csv",
+              "description": "Change this file in Postman when you want to analyze a different universe."
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/batches?filter={{filter}}&forceReanalysis={{forceReanalysis}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "batches"],
+          "query": [
+            { "key": "filter", "value": "{{filter}}" },
+            { "key": "forceReanalysis", "value": "{{forceReanalysis}}" }
+          ]
+        },
+        "description": "Uploads the CSV, synchronizes missing Sharadar data, performs deterministic analysis, applies the Java LLM filter, and starts first-stage forecasts."
+      }
+    },
+    {
+      "name": "02 - Poll batch until complete",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Batch status request succeeded', function () { pm.response.to.have.status(200); });",
+              "const body = pm.response.json();",
+              "const terminal = ['COMPLETED', 'PARTIAL_SUCCESS', 'FAILED'].includes(body.status);",
+              "let polls = Number(pm.collectionVariables.get('batchPollCount') || 0) + 1;",
+              "pm.collectionVariables.set('batchPollCount', String(polls));",
+              "console.log('Batch ' + body.batchAnalysisId + ': status=' + body.status + ', completed=' + body.completedItems + '/' + body.totalItems + ', successful=' + body.successfulItems + ', failed=' + body.failedItems);",
+              "if (!terminal) {",
+              "    pm.test('Batch polling limit was not exceeded', function () { pm.expect(polls).to.be.below(Number(pm.collectionVariables.get('maximumBatchPolls')) + 1); });",
+              "    if (polls < Number(pm.collectionVariables.get('maximumBatchPolls'))) {",
+              "        pm.execution.setNextRequest(pm.info.requestName);",
+              "        setTimeout(function () {}, Number(pm.collectionVariables.get('pollDelayMs') || 3000));",
+              "    } else {",
+              "        pm.execution.setNextRequest(null);",
+              "    }",
+              "} else {",
+              "    pm.test('Batch produced successful items', function () { pm.expect(body.successfulItems).to.be.above(0); });",
+              "    pm.execution.setNextRequest('03 - Inspect batch items');",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/batches/{{batchAnalysisId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "batches", "{{batchAnalysisId}}"]
+        },
+        "description": "Collection Runner repeats this request every pollDelayMs until the batch reaches a terminal status."
+      }
+    },
+    {
+      "name": "03 - Inspect batch items",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Batch items request succeeded', function () { pm.response.to.have.status(200); });",
+              "const items = pm.response.json();",
+              "const failed = items.filter(function (item) { return item.status === 'FAILED'; });",
+              "console.log('Batch items=' + items.length + ', failed=' + failed.length);",
+              "if (failed.length) console.warn('Failed items', failed);",
+              "pm.execution.setNextRequest('04 - Get five-session LLM ranking');"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/batches/{{batchAnalysisId}}/items",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "batches", "{{batchAnalysisId}}", "items"]
+        },
+        "description": "Displays the per-symbol status, errors, and linked analysis run IDs."
+      }
+    },
+    {
+      "name": "04 - Get five-session LLM ranking",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Five-session ranking request succeeded', function () { pm.response.to.have.status(200); });",
+              "const body = pm.response.json();",
+              "const rows = body.rankings || body.items || [];",
+              "console.log('Available five-session ranking rows=' + rows.length);",
+              "pm.execution.setNextRequest('05 - Start top-15 research and top-3 selection');"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/batches/{{batchAnalysisId}}/llm-rankings?horizon={{horizonTradingSessions}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "batches", "{{batchAnalysisId}}", "llm-rankings"],
+          "query": [{ "key": "horizon", "value": "{{horizonTradingSessions}}" }]
+        },
+        "description": "Shows the first-stage forecasts that form the input universe for comparative selection."
+      }
+    },
+    {
+      "name": "05 - Start top-15 research and top-3 selection",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Selection was accepted or completed', function () { pm.expect([200, 202]).to.include(pm.response.code); });",
+              "const body = pm.response.json();",
+              "pm.test('Response contains selectionId', function () { pm.expect(body.selectionId).to.be.a('string').and.not.empty; });",
+              "pm.collectionVariables.set('selectionId', body.selectionId);",
+              "pm.collectionVariables.set('selectionPollCount', '0');",
+              "console.log('Created selectionId=' + body.selectionId + ', status=' + body.status);",
+              "pm.execution.setNextRequest('06 - Poll selection until complete');"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"horizonTradingSessions\": {{horizonTradingSessions}},\n  \"waitForCompletion\": false,\n  \"maximumWaitSeconds\": 120,\n  \"forceReselection\": {{forceReselection}}\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/batches/{{batchAnalysisId}}/llm-selections",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "batches", "{{batchAnalysisId}}", "llm-selections"]
+        },
+        "description": "Starts the independent comparison model. With the default configuration it researches all 15 candidates and returns the top three."
+      }
+    },
+    {
+      "name": "06 - Poll selection until complete",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Selection status request succeeded', function () { pm.response.to.have.status(200); });",
+              "const body = pm.response.json();",
+              "const terminal = ['COMPLETED', 'FAILED'].includes(body.status);",
+              "let polls = Number(pm.collectionVariables.get('selectionPollCount') || 0) + 1;",
+              "pm.collectionVariables.set('selectionPollCount', String(polls));",
+              "console.log('Selection ' + body.selectionId + ': status=' + body.status + ', candidates=' + body.candidateCount + ', selected=' + body.selectedCount);",
+              "if (!terminal) {",
+              "    pm.test('Selection polling limit was not exceeded', function () { pm.expect(polls).to.be.below(Number(pm.collectionVariables.get('maximumSelectionPolls')) + 1); });",
+              "    if (polls < Number(pm.collectionVariables.get('maximumSelectionPolls'))) {",
+              "        pm.execution.setNextRequest(pm.info.requestName);",
+              "        setTimeout(function () {}, Number(pm.collectionVariables.get('pollDelayMs') || 3000));",
+              "    } else {",
+              "        pm.execution.setNextRequest(null);",
+              "    }",
+              "} else {",
+              "    pm.test('Selection completed successfully', function () { pm.expect(body.status).to.eql('COMPLETED'); });",
+              "    if (body.webResearch) {",
+              "        pm.test('All 15 candidates have web research records', function () { pm.expect(body.webResearch.length).to.eql(15); });",
+              "        console.log('Web research statuses', body.webResearch.map(function (r) { return r.symbol + ':' + r.status + ':searches=' + r.webSearchCount; }));",
+              "    }",
+              "    console.log('Selected candidates', (body.candidates || []).filter(function (candidate) { return candidate.selected; }));",
+              "    pm.execution.setNextRequest(null);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/llm-selections/{{selectionId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "llm-selections", "{{selectionId}}"]
+        },
+        "description": "Collection Runner repeats this request until selection is COMPLETED or FAILED. The completed response includes all candidate decisions and per-symbol web-research audits."
+      }
+    }
+  ]
+}

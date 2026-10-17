@@ -8,5 +8,7 @@ import jakarta.validation.constraints.Size;
 public record CreateAnalysisRequest(
 		@NotBlank @Size(max = 15) String symbol,
 		Boolean waitForCompletion,
-		@Min(1) @Max(120) Integer maximumWaitSeconds) {
+		@Min(1) @Max(120) Integer maximumWaitSeconds,
+		Boolean forceReanalysis,
+		Boolean filter) {
 }

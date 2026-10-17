@@ -35,23 +35,32 @@ public class AnalysisController {
 
 	@PostMapping("/analyses")
 	public ResponseEntity<?> create(@Valid @RequestBody CreateAnalysisRequest request) throws InterruptedException {
-		AnalysisSubmission submission = analysisService.submit(request.symbol());
+		AnalysisSubmission submission = analysisService.submit(request.symbol(),
+				Boolean.TRUE.equals(request.forceReanalysis()), request.filter() == null || request.filter());
+		if (submission.reusedExistingAnalysis()) {
+			return ResponseEntity.ok().header("X-Analysis-Reused", "true")
+					.body(submission.completion().join());
+		}
 		boolean wait = request.waitForCompletion() == null || request.waitForCompletion();
 		if (!wait) {
-			return ResponseEntity.accepted().body(analysisService.get(submission.analysisRunId()));
+			return ResponseEntity.accepted().header("X-Analysis-Reused", "false")
+					.body(analysisService.get(submission.analysisRunId()));
 		}
 
 		int requestedWait = request.maximumWaitSeconds() == null
 				? properties.getDefaultWaitSeconds() : request.maximumWaitSeconds();
 		int waitSeconds = Math.min(requestedWait, properties.getMaxWaitSeconds());
 		try {
-			return ResponseEntity.ok(submission.completion().get(waitSeconds, TimeUnit.SECONDS));
+			return ResponseEntity.ok().header("X-Analysis-Reused", "false")
+					.body(submission.completion().get(waitSeconds, TimeUnit.SECONDS));
 		}
 		catch (TimeoutException exception) {
-			return ResponseEntity.accepted().body(analysisService.get(submission.analysisRunId()));
+			return ResponseEntity.accepted().header("X-Analysis-Reused", "false")
+					.body(analysisService.get(submission.analysisRunId()));
 		}
 		catch (ExecutionException exception) {
-			return ResponseEntity.ok(analysisService.get(submission.analysisRunId()));
+			return ResponseEntity.ok().header("X-Analysis-Reused", "false")
+					.body(analysisService.get(submission.analysisRunId()));
 		}
 	}
 

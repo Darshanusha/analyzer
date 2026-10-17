@@ -14,6 +14,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
+import io.micrometer.core.instrument.MeterRegistry;
 
 @Service
 public class BatchAnalysisService {
@@ -23,17 +25,31 @@ public class BatchAnalysisService {
 	private final BatchAnalysisRepository repository;
 	private final AnalysisService analysisService;
 	private final ExecutorService executor;
+	private final MeterRegistry meters;
+
+	@Autowired
+	public BatchAnalysisService(BatchAnalysisRepository repository, AnalysisService analysisService,
+			ExecutorService executor, MeterRegistry meters) {
+		this.repository = repository; this.analysisService = analysisService; this.executor = executor; this.meters = meters;
+	}
 
 	public BatchAnalysisService(BatchAnalysisRepository repository, AnalysisService analysisService,
 			ExecutorService executor) {
-		this.repository = repository;
-		this.analysisService = analysisService;
-		this.executor = executor;
+		this(repository, analysisService, executor, null);
 	}
 
 	public BatchAnalysisState submit(List<String> symbols) {
-		UUID batchId = repository.create(symbols);
-		java.util.concurrent.CompletableFuture.runAsync(() -> process(batchId, symbols), executor);
+		return submit(symbols, false, true);
+	}
+
+	public BatchAnalysisState submit(List<String> symbols, boolean forceReanalysis) {
+		return submit(symbols, forceReanalysis, true);
+	}
+
+	public BatchAnalysisState submit(List<String> symbols, boolean forceReanalysis, boolean filter) {
+		UUID batchId = repository.create(symbols, filter);
+		java.util.concurrent.CompletableFuture.runAsync(
+				() -> process(batchId, symbols, forceReanalysis, filter), executor);
 		return get(batchId);
 	}
 
@@ -61,21 +77,25 @@ public class BatchAnalysisService {
 			throw new ApiException(HttpStatus.CONFLICT, "BATCH_HAS_NO_FAILED_ITEMS",
 					"The batch has no failed items to retry");
 		}
-		BatchAnalysisState retry = submit(failedSymbols);
+		BatchAnalysisState retry = submit(failedSymbols, true, original.filter());
 		log.info("Created retry batch: originalBatchId={}, retryBatchId={}, failedItems={}",
 				batchId, retry.batchAnalysisId(), failedSymbols.size());
 		return retry;
 	}
 
-	private void process(UUID batchId, List<String> symbols) {
-		log.info("Starting batch analysis: batchId={}, items={}", batchId, symbols.size());
+	private void process(UUID batchId, List<String> symbols, boolean forceReanalysis, boolean filter) {
+		log.info("Starting batch analysis: batchId={}, items={}, filter={}", batchId, symbols.size(), filter);
 		repository.markRunning(batchId);
 		for (String symbol : symbols) {
 			try {
-				AnalysisSubmission submission = analysisService.submit(symbol);
+				AnalysisSubmission submission = analysisService.submit(symbol, forceReanalysis, filter);
 				repository.linkAnalysis(batchId, symbol, submission.analysisRunId());
 				submission.completion().join();
-				repository.completeItem(batchId, symbol);
+				repository.completeItem(batchId, symbol, submission.reusedExistingAnalysis());
+				if (submission.reusedExistingAnalysis()) {
+					log.info("Reused today's completed analysis for batch item: batchId={}, symbol={}, analysisRunId={}",
+							batchId, symbol, submission.analysisRunId());
+				}
 			}
 			catch (RuntimeException exception) {
 				Throwable cause = exception instanceof CompletionException && exception.getCause() != null
@@ -90,8 +110,20 @@ public class BatchAnalysisService {
 		}
 		repository.refreshSummary(batchId, true);
 		BatchAnalysisState completed = get(batchId);
-		log.info("Completed batch analysis: batchId={}, status={}, successfulItems={}, failedItems={}",
-				batchId, completed.status(), completed.successfulItems(), completed.failedItems());
+		List<BatchAnalysisItemState> items = repository.findItems(batchId);
+		long reused = items.stream().filter(BatchAnalysisItemState::reusedExistingAnalysis).count();
+		long filtered = items.stream().filter(i -> "FILTERED_OUT".equals(i.llmForecastStatus())).count();
+		long available = items.stream().filter(i -> "AVAILABLE".equals(i.llmForecastStatus())).count();
+		long abstained = items.stream().filter(i -> "ABSTAINED".equals(i.llmForecastStatus())).count();
+		log.info("Completed batch analysis: batchId={}, status={}, total={}, reused={}, passedFilter={}, filtered={}, "
+				+ "abstained={}, llmSuccessful={}, failed={}", batchId, completed.status(), items.size(), reused,
+				Math.max(0, items.size() - filtered), filtered, abstained, available, completed.failedItems());
+		if (meters != null) {
+			meters.counter("stock.analysis.batch.items", "outcome", "reused").increment(reused);
+			meters.counter("stock.analysis.batch.items", "outcome", "filtered").increment(filtered);
+			meters.counter("stock.analysis.batch.items", "outcome", "llm_available").increment(available);
+			meters.counter("stock.analysis.batch.items", "outcome", "failed").increment(completed.failedItems());
+		}
 	}
 
 	private String errorCode(Throwable exception) {

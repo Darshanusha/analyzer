@@ -1,8 +1,8 @@
 package com.stock.analyzer.forecast.application;
 
 import java.net.URI;
+import java.net.http.HttpClient;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -16,8 +16,11 @@ import com.stock.analyzer.forecast.domain.LlmInformationRequest;
 import com.stock.analyzer.forecast.domain.LlmWebResearchResult;
 import com.stock.analyzer.forecast.domain.LlmWebSource;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import tools.jackson.core.JacksonException;
@@ -26,6 +29,7 @@ import tools.jackson.databind.ObjectMapper;
 
 @Component
 public class OpenAiWebResearchClient implements LlmWebResearchClient {
+	private static final Logger log = LoggerFactory.getLogger(OpenAiWebResearchClient.class);
 
 	private static final String RESEARCH_INSTRUCTIONS = """
 			Search only the configured approved domains for current, decision-relevant facts about the named
@@ -46,7 +50,11 @@ public class OpenAiWebResearchClient implements LlmWebResearchClient {
 		this.objectMapper = objectMapper;
 		this.meterRegistry = meterRegistry;
 		String baseUrl = properties.getBaseUrl() == null ? "" : properties.getBaseUrl().replaceAll("/+$", "");
-		this.restClient = RestClient.builder().baseUrl(baseUrl).build();
+		HttpClient httpClient = HttpClient.newBuilder()
+				.connectTimeout(properties.getConnectTimeout()).build();
+		JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
+		requestFactory.setReadTimeout(properties.getReadTimeout());
+		this.restClient = RestClient.builder().baseUrl(baseUrl).requestFactory(requestFactory).build();
 	}
 
 	@Override
@@ -80,11 +88,15 @@ public class OpenAiWebResearchClient implements LlmWebResearchClient {
 		}
 		catch (RuntimeException exception) {
 			long duration = elapsedMillis(started);
+			String errorMessage = safeMessage(exception);
+			log.warn("OpenAI web research failed: symbol={}, category={}, model={}, durationMs={}, "
+					+ "failureType={}, errorMessage={}", symbol, request.category(), properties.getModel(),
+					duration, exception.getClass().getSimpleName(), errorMessage);
 			meterRegistry.counter("stock.analysis.llm.web.research", "status", "FAILED").increment();
 			meterRegistry.timer("stock.analysis.llm.web.research.duration", "status", "FAILED")
 					.record(duration, TimeUnit.MILLISECONDS);
 			return new LlmWebResearchResult("FAILED", null, List.of(), properties.getModel(), null, null, null,
-					duration, exception.getClass().getSimpleName(), safeMessage(exception));
+					duration, exception.getClass().getSimpleName(), errorMessage);
 		}
 	}
 
@@ -109,6 +121,7 @@ public class OpenAiWebResearchClient implements LlmWebResearchClient {
 				clean(request.dataRequested(), 500), clean(request.reason(), 500), query);
 		Map<String, Object> body = new LinkedHashMap<>();
 		body.put("model", properties.getModel());
+		body.put("reasoning", Map.of("effort", properties.getReasoningEffort()));
 		body.put("input", input);
 		body.put("tools", List.of(webSearch));
 		body.put("tool_choice", "required");

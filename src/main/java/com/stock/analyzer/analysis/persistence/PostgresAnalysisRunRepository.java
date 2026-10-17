@@ -2,7 +2,10 @@ package com.stock.analyzer.analysis.persistence;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -131,6 +134,26 @@ public class PostgresAnalysisRunRepository implements AnalysisRunRepository {
 				       final_output::text, error_code, error_message
 				FROM analyzer.analysis_run WHERE id = :id
 				""").param("id", analysisRunId).query(this::mapState).optional();
+	}
+
+	@Override
+	public Optional<AnalysisRunState> findCompletedForDay(UUID instrumentId, Instant dayStart,
+			Instant nextDayStart) {
+		return jdbcClient.sql("""
+				SELECT id, requested_symbol, status, requested_at, started_at, completed_at,
+				       final_output::text, error_code, error_message
+				FROM analyzer.analysis_run
+				WHERE instrument_id = :instrumentId
+				  AND status = 'COMPLETED'
+				  AND final_output IS NOT NULL
+				  AND completed_at >= :dayStart
+				  AND completed_at < :nextDayStart
+				ORDER BY completed_at DESC
+				LIMIT 1
+				""").param("instrumentId", instrumentId)
+				.param("dayStart", OffsetDateTime.ofInstant(dayStart, ZoneOffset.UTC))
+				.param("nextDayStart", OffsetDateTime.ofInstant(nextDayStart, ZoneOffset.UTC))
+				.query(this::mapState).optional();
 	}
 
 	@Override

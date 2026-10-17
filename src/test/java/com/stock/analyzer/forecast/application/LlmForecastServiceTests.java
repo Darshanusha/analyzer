@@ -84,6 +84,21 @@ class LlmForecastServiceTests {
 	}
 
 	@Test
+	void recordsJavaFilteredForecastWithoutCallingOpenAi() {
+		when(client.isAvailable()).thenReturn(true);
+		when(client.configuredModel()).thenReturn("test-model");
+
+		LlmForecastResult result = service.forecast(UUID.randomUUID(), instrument(),
+				LocalDate.of(2026, 10, 2), LocalDate.of(2026, 10, 5), "GOOD", components(), true);
+
+		assertThat(result.status()).isEqualTo("FILTERED_OUT");
+		assertThat(result.errorCode()).isEqualTo("JAVA_CANDIDATE_FILTER");
+		assertThat(result.errorMessage()).contains("Java candidate score=0");
+		verify(client, never()).forecast(any());
+		verify(repository).save(any(LlmForecastResult.class), any());
+	}
+
+	@Test
 	void convertsInvalidModelScoreIntoAuditableFailure() {
 		when(client.isAvailable()).thenReturn(true);
 		when(client.configuredModel()).thenReturn("test-model");

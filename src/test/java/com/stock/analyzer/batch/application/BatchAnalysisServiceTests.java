@@ -33,14 +33,14 @@ class BatchAnalysisServiceTests {
 		when(repository.find(originalId)).thenReturn(Optional.of(batch(originalId, "PARTIAL_SUCCESS", 2, 1, 1)));
 		when(repository.findItems(originalId)).thenReturn(List.of(
 				item("AAPL", "COMPLETED"), item("MSFT", "FAILED")));
-		when(repository.create(List.of("MSFT"))).thenReturn(retryId);
+		when(repository.create(List.of("MSFT"), true)).thenReturn(retryId);
 		when(repository.find(retryId)).thenReturn(Optional.of(batch(retryId, "QUEUED", 1, 0, 0)));
 
 		BatchAnalysisState result = service.retryFailed(originalId);
 
 		assertThat(result.batchAnalysisId()).isEqualTo(retryId);
 		assertThat(result.totalItems()).isEqualTo(1);
-		verify(repository).create(List.of("MSFT"));
+		verify(repository).create(List.of("MSFT"), true);
 		verify(executor).execute(any(Runnable.class));
 	}
 
@@ -66,12 +66,12 @@ class BatchAnalysisServiceTests {
 	}
 
 	private BatchAnalysisState batch(UUID id, String status, int total, int completed, int failed) {
-		return new BatchAnalysisState(id, status, total, completed, completed - failed, failed,
+		return new BatchAnalysisState(id, status, total, completed, completed - failed, failed, true,
 				Instant.parse("2026-10-03T00:00:00Z"), "RUNNING".equals(status) ? null : Instant.now());
 	}
 
 	private BatchAnalysisItemState item(String symbol, String status) {
-		return new BatchAnalysisItemState(UUID.randomUUID(), symbol, status, null,
+		return new BatchAnalysisItemState(UUID.randomUUID(), symbol, status, null, false, null,
 				"FAILED".equals(status) ? "TEST_FAILURE" : null,
 				"FAILED".equals(status) ? "Test failure" : null,
 				Instant.parse("2026-10-03T00:00:00Z"), Instant.parse("2026-10-03T00:01:00Z"));
