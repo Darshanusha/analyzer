@@ -21,6 +21,7 @@ import java.util.regex.Pattern;
 import com.stock.analyzer.analysis.domain.AnalysisComponentResult;
 import com.stock.analyzer.api.error.ApiException;
 import com.stock.analyzer.configuration.LlmForecastProperties;
+import com.stock.analyzer.configuration.TouchTargetProperties;
 import com.stock.analyzer.forecast.domain.BatchLlmRankingItem;
 import com.stock.analyzer.forecast.domain.BatchLlmRankingResponse;
 import com.stock.analyzer.forecast.domain.LlmForecastCall;
@@ -47,7 +48,7 @@ import tools.jackson.databind.ObjectMapper;
 public class LlmForecastService {
 
 	public static final String SCORE_INTERPRETATION =
-			"UNCALIBRATED_LLM_UP_SCORE_0_TO_100_NOT_A_PROBABILITY_OR_TRADE_RECOMMENDATION";
+			"UNCALIBRATED_LLM_DIRECTION_AND_TOUCH_SCORES_0_TO_100_NOT_PROBABILITIES_OR_TRADE_RECOMMENDATIONS";
 	private static final Logger log = LoggerFactory.getLogger(LlmForecastService.class);
 	private static final Set<String> CONFIDENCE_LEVELS = Set.of("LOW", "MEDIUM", "HIGH");
 	private static final Set<String> GAP_WORKFLOW_STATUSES = Set.of(
@@ -62,6 +63,7 @@ public class LlmForecastService {
 	private final LlmForecastRepository repository;
 	private final LlmInformationGapRepository gapRepository;
 	private final LlmForecastProperties properties;
+	private final TouchTargetProperties touchTarget;
 	private final ObjectMapper objectMapper;
 	private final MeterRegistry meterRegistry;
 	private final Clock clock;
@@ -70,31 +72,33 @@ public class LlmForecastService {
 	public LlmForecastService(LlmForecastClient client, LlmWebResearchClient webResearchClient,
 			LlmForecastRepository repository, LlmInformationGapRepository gapRepository,
 			LlmForecastProperties properties, LlmCandidateFilter candidateFilter,
-			ObjectMapper objectMapper, MeterRegistry meterRegistry) {
-		this(client, webResearchClient, repository, gapRepository, properties, candidateFilter, objectMapper, meterRegistry,
-				Clock.systemUTC());
+			TouchTargetProperties touchTarget, ObjectMapper objectMapper, MeterRegistry meterRegistry) {
+		this(client, webResearchClient, repository, gapRepository, properties, candidateFilter, touchTarget,
+				objectMapper, meterRegistry, Clock.systemUTC());
 	}
 
 	LlmForecastService(LlmForecastClient client, LlmWebResearchClient webResearchClient,
 			LlmForecastRepository repository, LlmInformationGapRepository gapRepository,
 			LlmForecastProperties properties, ObjectMapper objectMapper, MeterRegistry meterRegistry, Clock clock) {
 		this(client, webResearchClient, repository, gapRepository, properties, new LlmCandidateFilter(properties),
-				objectMapper, meterRegistry, clock);
+				new TouchTargetProperties(), objectMapper, meterRegistry, clock);
 	}
 
 	LlmForecastService(LlmForecastClient client, LlmWebResearchClient webResearchClient,
 			LlmForecastRepository repository, LlmInformationGapRepository gapRepository,
 			LlmForecastProperties properties, LlmCandidateFilter candidateFilter,
-			ObjectMapper objectMapper, MeterRegistry meterRegistry, Clock clock) {
+			TouchTargetProperties touchTarget, ObjectMapper objectMapper, MeterRegistry meterRegistry, Clock clock) {
 		this.client = client;
 		this.candidateFilter = candidateFilter;
 		this.webResearchClient = webResearchClient;
 		this.repository = repository;
 		this.gapRepository = gapRepository;
 		this.properties = properties;
+		this.touchTarget = touchTarget;
 		this.objectMapper = objectMapper;
 		this.meterRegistry = meterRegistry;
 		this.clock = clock;
+		touchTarget.validate();
 		validateConfiguration();
 	}
 
@@ -174,9 +178,12 @@ public class LlmForecastService {
 					clean(output.bullishEvidence()), clean(output.bearishEvidence()), clean(output.risks()),
 					clean(output.dataLimitations()), SCORE_INTERPRETATION, "OPENAI", call.model(),
 					properties.getPromptVersion(), inputSha256, call.inputTokens(), call.outputTokens(), call.totalTokens(),
-					elapsedMillis(started), null, null, Instant.now(clock), null, 1, informationCutoff);
-			log.info("LLM forecast completed: analysisRunId={}, symbol={}, direction={}, upScore={}, confidence={}, model={}",
-					analysisRunId, instrument.symbol(), direction, output.upScore(), output.confidence(), call.model());
+					elapsedMillis(started), null, null, Instant.now(clock), null, 1, informationCutoff,
+					touchTarget.getUpsidePercent(), touchTarget.getDownsidePercent(), output.upsideTouchScore(),
+					output.downsideTouchScore(), output.upsideTouchScore() - output.downsideTouchScore());
+			log.info("LLM forecast completed: analysisRunId={}, symbol={}, direction={}, upScore={}, upsideTouchScore={}, downsideTouchScore={}, confidence={}, model={}",
+					analysisRunId, instrument.symbol(), direction, output.upScore(), output.upsideTouchScore(),
+					output.downsideTouchScore(), output.confidence(), call.model());
 			LlmForecastResult saved = save(result, snapshot, started);
 			for (var horizon : call.forecasts()) {
 				if (horizon.horizonTradingSessions() == 1) continue;
@@ -190,7 +197,9 @@ public class LlmForecastService {
 						clean(value.risks()), clean(value.dataLimitations()), SCORE_INTERPRETATION, "OPENAI",
 						call.model(), properties.getPromptVersion(), inputSha256, call.inputTokens(), call.outputTokens(),
 						call.totalTokens(), elapsedMillis(started), null, null, Instant.now(clock), null,
-						sessions, informationCutoff);
+						sessions, informationCutoff, touchTarget.getUpsidePercent(), touchTarget.getDownsidePercent(),
+						value.upsideTouchScore(), value.downsideTouchScore(),
+						value.upsideTouchScore() - value.downsideTouchScore());
 				save(additional, snapshot, started);
 			}
 			recordAudits(audits);
@@ -277,6 +286,12 @@ public class LlmForecastService {
 		if (result.upScore() != null) meterRegistry.summary("stock.analysis.llm.up.score",
 				"horizon", Integer.toString(result.horizonTradingSessions()), "direction", result.direction())
 				.record(result.upScore());
+		if (result.upsideTouchScore() != null) meterRegistry.summary("stock.analysis.llm.touch.score",
+				"horizon", Integer.toString(result.horizonTradingSessions()), "target", "upside")
+				.record(result.upsideTouchScore());
+		if (result.downsideTouchScore() != null) meterRegistry.summary("stock.analysis.llm.touch.score",
+				"horizon", Integer.toString(result.horizonTradingSessions()), "target", "downside")
+				.record(result.downsideTouchScore());
 		return result;
 	}
 
@@ -286,13 +301,14 @@ public class LlmForecastService {
 				cutoffDate, targetSession, status, "UNCERTAIN", null, "LOW", message,
 				List.of(), List.of(), List.of(), List.of(message), SCORE_INTERPRETATION, "OPENAI",
 				client.configuredModel(), properties.getPromptVersion(), inputSha256, null, null, null,
-				elapsedMillis(started), errorCode, message, Instant.now(clock), null);
+				elapsedMillis(started), errorCode, message, Instant.now(clock), null, 1, Instant.now(clock),
+				touchTarget.getUpsidePercent(), touchTarget.getDownsidePercent(), null, null, null);
 	}
 
 	private Map<String, Object> inputSnapshot(Instrument instrument, LocalDate cutoffDate, LocalDate targetSession,
 			String dataQualityStatus, List<AnalysisComponentResult> components, Instant informationCutoff) {
 		Map<String, Object> snapshot = new LinkedHashMap<>();
-		snapshot.put("schemaVersion", 2);
+		snapshot.put("schemaVersion", 3);
 		snapshot.put("instrumentId", instrument.id());
 		snapshot.put("symbol", instrument.symbol());
 		snapshot.put("companyName", instrument.name());
@@ -301,7 +317,13 @@ public class LlmForecastService {
 		snapshot.put("cutoffDate", cutoffDate);
 		snapshot.put("targetSession", targetSession);
 		snapshot.put("informationCutoff", informationCutoff);
-		snapshot.put("horizon", "NEXT_COMPLETED_US_TRADING_SESSION");
+		snapshot.put("horizonsTradingSessions", List.of(1, 5));
+		snapshot.put("touchTargetDefinition", Map.of(
+				"upsidePercent", touchTarget.getUpsidePercent(),
+				"downsidePercent", touchTarget.getDownsidePercent(),
+				"success", "FULLY_ADJUSTED_INTRADAY_HIGH_TOUCHES_UPSIDE_WITHIN_HORIZON",
+				"downsideRisk", "FULLY_ADJUSTED_INTRADAY_LOW_TOUCHES_DOWNSIDE_WITHIN_HORIZON",
+				"scoreInterpretation", "UNCALIBRATED_LLM_ESTIMATE_0_TO_100_NOT_A_STATISTICAL_PROBABILITY"));
 		snapshot.put("dataQualityStatus", dataQualityStatus);
 		snapshot.put("scoreDefinition", SCORE_INTERPRETATION);
 		List<Map<String, Object>> evidence = new ArrayList<>();
@@ -373,7 +395,8 @@ public class LlmForecastService {
 		audits.stream().filter(audit -> !"WEB_RESOLVED".equals(audit.resolutionStatus()))
 				.map(audit -> "Additional information unavailable: " + audit.request().dataRequested())
 				.map(value -> clean(value, 500)).forEach(limitations::add);
-		return new LlmForecastOutput(output.upScore(), output.confidence(), output.thesis(),
+		return new LlmForecastOutput(output.upScore(), output.upsideTouchScore(), output.downsideTouchScore(),
+				output.confidence(), output.thesis(),
 				output.bullishEvidence(), output.bearishEvidence(), output.risks(),
 				limitations.stream().distinct().limit(8).toList(), output.informationRequests());
 	}
@@ -473,6 +496,12 @@ public class LlmForecastService {
 		if (output == null) throw new IllegalArgumentException("Structured forecast output is missing");
 		if (output.upScore() < 0 || output.upScore() > 100) {
 			throw new IllegalArgumentException("upScore must be between 0 and 100");
+		}
+		if (output.upsideTouchScore() < 0 || output.upsideTouchScore() > 100) {
+			throw new IllegalArgumentException("upsideTouchScore must be between 0 and 100");
+		}
+		if (output.downsideTouchScore() < 0 || output.downsideTouchScore() > 100) {
+			throw new IllegalArgumentException("downsideTouchScore must be between 0 and 100");
 		}
 		String confidence = output.confidence() == null ? "" : output.confidence().toUpperCase(Locale.ROOT);
 		if (!CONFIDENCE_LEVELS.contains(confidence)) {

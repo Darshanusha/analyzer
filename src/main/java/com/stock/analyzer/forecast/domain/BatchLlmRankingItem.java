@@ -16,5 +16,13 @@ public record BatchLlmRankingItem(
 		String model,
 		String promptVersion,
 		Boolean actualUp,
-		Boolean correct) {
+		Boolean correct,
+		Integer upsideTouchScore,
+		Integer downsideTouchScore,
+		Integer touchScoreSpread,
+		Double upsideThresholdPercent,
+		Double downsideThresholdPercent,
+		Boolean upsideTargetTouched,
+		Boolean downsideTargetTouched,
+		String touchSequence) {
 }

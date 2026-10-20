@@ -14,11 +14,12 @@ import com.stock.analyzer.forecast.domain.LlmSelectionState;
 public interface LlmSelectionRepository {
 
 	UUID create(UUID batchAnalysisId, int horizon, int candidateLimit, int selectionLimit,
-			String model, String promptVersion);
+			String model, String promptVersion, double upsideThresholdPercent, double downsideThresholdPercent);
 
 	void markRunning(UUID selectionId);
 
-	List<LlmSelectionCandidateInput> loadCandidates(UUID batchAnalysisId, int horizon, int limit);
+	List<LlmSelectionCandidateInput> loadCandidates(UUID batchAnalysisId, int horizon, int limit,
+			double upsideThresholdPercent, double downsideThresholdPercent);
 
 	void complete(UUID selectionId, Map<String, Object> inputSnapshot, String inputSha256,
 			LlmSelectionCall call, List<LlmSelectionCandidateResult> candidates, long durationMs);

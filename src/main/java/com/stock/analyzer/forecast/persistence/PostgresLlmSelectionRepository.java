@@ -29,7 +29,7 @@ import tools.jackson.databind.ObjectMapper;
 public class PostgresLlmSelectionRepository implements LlmSelectionRepository {
 
 	private static final String SCORE_INTERPRETATION =
-			"UNCALIBRATED_COMPARATIVE_SELECTION_SCORE_0_TO_100_NOT_A_PROBABILITY_OR_TRADE_RECOMMENDATION";
+			"UNCALIBRATED_RISK_ADJUSTED_TOUCH_SELECTION_SCORE_0_TO_100_NOT_A_PROBABILITY_OR_TRADE_RECOMMENDATION";
 	private final JdbcClient jdbc;
 	private final ObjectMapper mapper;
 
@@ -40,16 +40,20 @@ public class PostgresLlmSelectionRepository implements LlmSelectionRepository {
 
 	@Override
 	public UUID create(UUID batchAnalysisId, int horizon, int candidateLimit, int selectionLimit,
-			String model, String promptVersion) {
+			String model, String promptVersion, double upsideThresholdPercent, double downsideThresholdPercent) {
 		UUID id = UUID.randomUUID();
 		jdbc.sql("""
 				INSERT INTO analyzer.llm_selection_run (
 				 id, batch_analysis_id, status, horizon_trading_sessions, candidate_limit,
-				 selection_limit, model, prompt_version, trace_id)
-				VALUES (:id,:batchId,'QUEUED',:horizon,:candidateLimit,:selectionLimit,:model,:prompt,:trace)
+				 selection_limit, model, prompt_version, trace_id, objective,
+				 upside_threshold_percent, downside_threshold_percent)
+				VALUES (:id,:batchId,'QUEUED',:horizon,:candidateLimit,:selectionLimit,:model,:prompt,:trace,
+				 'UPSIDE_TOUCH_RISK_ADJUSTED',:upsideThreshold,:downsideThreshold)
 				""").param("id", id).param("batchId", batchAnalysisId).param("horizon", horizon)
 				.param("candidateLimit", candidateLimit).param("selectionLimit", selectionLimit)
-				.param("model", model).param("prompt", promptVersion).param("trace", MDC.get("trace_id")).update();
+				.param("model", model).param("prompt", promptVersion).param("trace", MDC.get("trace_id"))
+				.param("upsideThreshold", upsideThresholdPercent).param("downsideThreshold", downsideThresholdPercent)
+				.update();
 		return id;
 	}
 
@@ -60,22 +64,28 @@ public class PostgresLlmSelectionRepository implements LlmSelectionRepository {
 	}
 
 	@Override
-	public List<LlmSelectionCandidateInput> loadCandidates(UUID batchAnalysisId, int horizon, int limit) {
+	public List<LlmSelectionCandidateInput> loadCandidates(UUID batchAnalysisId, int horizon, int limit,
+			double upsideThresholdPercent, double downsideThresholdPercent) {
 		return jdbc.sql("""
 				SELECT f.id AS forecast_id, f.analysis_run_id, f.instrument_id,
-				 ROW_NUMBER() OVER (ORDER BY f.up_score DESC, f.symbol) AS original_rank,
+				 ROW_NUMBER() OVER (ORDER BY f.touch_score_spread DESC, f.upside_touch_score DESC, f.symbol) AS original_rank,
 				 f.symbol, f.stock_name, instrument.sector, f.cutoff_date, f.target_session,
 				 f.information_cutoff, f.up_score, f.confidence, f.thesis,
-				 run.data_quality_status, f.model, f.prompt_version, f.input_snapshot, f.response_payload
+				 run.data_quality_status, f.model, f.prompt_version, f.input_snapshot, f.response_payload,
+				 f.upside_touch_score, f.downside_touch_score, f.touch_score_spread
 				FROM analyzer.batch_analysis_item item
 				JOIN analyzer.llm_forecast f ON f.analysis_run_id=item.analysis_run_id
 				JOIN analyzer.analysis_run run ON run.id=f.analysis_run_id
 				JOIN analyzer.instrument instrument ON instrument.id=f.instrument_id
 				WHERE item.batch_analysis_id=:batchId AND item.status='COMPLETED'
 				 AND f.status='AVAILABLE' AND f.up_score IS NOT NULL
+				 AND f.upside_touch_score IS NOT NULL AND f.downside_touch_score IS NOT NULL
+				 AND f.upside_threshold_percent=:upsideThreshold
+				 AND f.downside_threshold_percent=:downsideThreshold
 				 AND f.horizon_trading_sessions=:horizon
-				ORDER BY f.up_score DESC, f.symbol LIMIT :limit
+				ORDER BY f.touch_score_spread DESC, f.upside_touch_score DESC, f.symbol LIMIT :limit
 				""").param("batchId", batchAnalysisId).param("horizon", horizon).param("limit", limit)
+				.param("upsideThreshold", upsideThresholdPercent).param("downsideThreshold", downsideThresholdPercent)
 				.query((rs, row) -> new LlmSelectionCandidateInput(
 						rs.getObject("forecast_id", UUID.class), rs.getObject("analysis_run_id", UUID.class),
 						rs.getObject("instrument_id", UUID.class), rs.getInt("original_rank"), rs.getString("symbol"),
@@ -83,7 +93,9 @@ public class PostgresLlmSelectionRepository implements LlmSelectionRepository {
 						rs.getDate("target_session").toLocalDate(), instant(rs, "information_cutoff"),
 						rs.getInt("up_score"), rs.getString("confidence"), rs.getString("thesis"),
 						rs.getString("data_quality_status"), rs.getString("model"), rs.getString("prompt_version"),
-						map(rs.getString("input_snapshot")), map(rs.getString("response_payload")))).list();
+						map(rs.getString("input_snapshot")), map(rs.getString("response_payload")),
+						integerOrNull(rs, "upside_touch_score"), integerOrNull(rs, "downside_touch_score"),
+						integerOrNull(rs, "touch_score_spread"))).list();
 	}
 
 	@Override
@@ -111,16 +123,21 @@ public class PostgresLlmSelectionRepository implements LlmSelectionRepository {
 		jdbc.sql("""
 				INSERT INTO analyzer.llm_selection_candidate (
 				 id, selection_run_id, llm_forecast_id, symbol, original_rank, original_up_score,
+				 original_upside_touch_score, original_downside_touch_score, original_touch_score_spread,
 				 original_confidence, selected, selected_rank, selection_score, confidence,
 				 comparative_thesis, bullish_evidence, bearish_evidence, comparative_advantages,
 				 invalidation_risks, data_limitations, exclusion_reason)
-				VALUES (:id,:selectionId,:forecastId,:symbol,:originalRank,:originalScore,:originalConfidence,
+				VALUES (:id,:selectionId,:forecastId,:symbol,:originalRank,:originalScore,
+				 :originalUpside,:originalDownside,:originalSpread,:originalConfidence,
 				 :selected,:selectedRank,:selectionScore,:confidence,:thesis,CAST(:bullish AS jsonb),
 				 CAST(:bearish AS jsonb),CAST(:advantages AS jsonb),CAST(:risks AS jsonb),
 				 CAST(:limitations AS jsonb),:exclusionReason)
 				""").param("id", UUID.randomUUID()).param("selectionId", selectionId)
 				.param("forecastId", candidate.forecastId()).param("symbol", candidate.symbol())
 				.param("originalRank", candidate.originalRank()).param("originalScore", candidate.originalUpScore())
+				.param("originalUpside", candidate.originalUpsideTouchScore())
+				.param("originalDownside", candidate.originalDownsideTouchScore())
+				.param("originalSpread", candidate.originalTouchScoreSpread())
 				.param("originalConfidence", candidate.originalConfidence()).param("selected", candidate.selected())
 				.param("selectedRank", candidate.selectedRank()).param("selectionScore", candidate.selectionScore())
 				.param("confidence", candidate.confidence()).param("thesis", candidate.comparativeThesis())
@@ -224,7 +241,8 @@ public class PostgresLlmSelectionRepository implements LlmSelectionRepository {
 				state.selectedCount(), state.scoreInterpretation(), state.model(), state.promptVersion(),
 				state.inputTokens(), state.outputTokens(), state.totalTokens(), state.durationMs(), state.errorCode(),
 				state.errorMessage(), state.reusedExistingSelection(), state.createdAt(), state.completedAt(), candidates,
-				output.portfolioLevelRisks(), output.overallLimitations(), research);
+				output.portfolioLevelRisks(), output.overallLimitations(), research, state.objective(),
+				state.upsideThresholdPercent(), state.downsideThresholdPercent());
 	}
 
 	private List<LlmSelectionWebResearch> webResearch(UUID selectionId) {
@@ -254,7 +272,9 @@ public class PostgresLlmSelectionRepository implements LlmSelectionRepository {
 				SCORE_INTERPRETATION, rs.getString("model"), rs.getString("prompt_version"),
 				longOrNull(rs, "input_tokens"), longOrNull(rs, "output_tokens"), longOrNull(rs, "total_tokens"),
 				longOrNull(rs, "duration_ms"), rs.getString("error_code"), rs.getString("error_message"), false,
-				instant(rs, "created_at"), instant(rs, "completed_at"), List.of(), List.of(), List.of(), List.of());
+				instant(rs, "created_at"), instant(rs, "completed_at"), List.of(), List.of(), List.of(), List.of(),
+				rs.getString("objective"), doubleOrNull(rs, "upside_threshold_percent"),
+				doubleOrNull(rs, "downside_threshold_percent"));
 	}
 
 	private LlmSelectionCandidateResult mapCandidate(ResultSet rs, int row) throws SQLException {
@@ -264,7 +284,8 @@ public class PostgresLlmSelectionRepository implements LlmSelectionRepository {
 				rs.getString("confidence"), rs.getString("comparative_thesis"), list(rs.getString("bullish_evidence")),
 				list(rs.getString("bearish_evidence")), list(rs.getString("comparative_advantages")),
 				list(rs.getString("invalidation_risks")), list(rs.getString("data_limitations")),
-				rs.getString("exclusion_reason"));
+				rs.getString("exclusion_reason"), integerOrNull(rs, "original_upside_touch_score"),
+				integerOrNull(rs, "original_downside_touch_score"), integerOrNull(rs, "original_touch_score_spread"));
 	}
 
 	private Map<String, Object> map(String value) {
@@ -296,6 +317,10 @@ public class PostgresLlmSelectionRepository implements LlmSelectionRepository {
 
 	private Long longOrNull(ResultSet rs, String column) throws SQLException {
 		Object value = rs.getObject(column); return value == null ? null : ((Number) value).longValue();
+	}
+
+	private Double doubleOrNull(ResultSet rs, String column) throws SQLException {
+		Object value = rs.getObject(column); return value == null ? null : ((Number) value).doubleValue();
 	}
 
 	private Instant instant(ResultSet rs, String column) throws SQLException {

@@ -23,5 +23,8 @@ public record LlmSelectionCandidateInput(
 		String model,
 		String promptVersion,
 		Map<String, Object> inputSnapshot,
-		Map<String, Object> responsePayload) {
+		Map<String, Object> responsePayload,
+		Integer upsideTouchScore,
+		Integer downsideTouchScore,
+		Integer touchScoreSpread) {
 }

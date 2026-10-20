@@ -13,12 +13,15 @@ class LlmForecastPromptCatalogTests {
 
 	@Test
 	void loadsTheActiveVersionedPromptFromResources() {
-		String prompt = catalog.load("llm-multi-horizon-v4");
+		String prompt = catalog.load("llm-multi-horizon-v5");
 
-		assertThat(prompt).contains("exactly 1 and exactly 5 completed U.S. trading sessions")
+		assertThat(prompt).contains("exactly 1 and exactly 5 completed")
+				.contains("U.S. trading sessions")
 				.contains("no more than five")
 				.contains("database tool calls")
-				.contains("When get_recent_news is not available")
+				.contains("When get_recent_news is unavailable")
+				.contains("upsideTouchScore")
+				.contains("downsideTouchScore")
 				.doesNotContain("BUY");
 	}
 

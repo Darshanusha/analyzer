@@ -103,10 +103,16 @@ public class DeterministicAnalysisEngine {
 		Double sma200 = valid.size() >= 200 ? sma(valid, 200) : null;
 		Double rsi14 = rsi(valid, 14);
 		Double return1d = change(valid, 1);
+		Double return2d = change(valid, 2);
+		Double return5d = change(valid, 5);
+		Double return10d = change(valid, 10);
 		Double return20d = change(valid, 20);
+		Double volatility5 = volatility(valid, 5);
 		Double volatility20 = volatility(valid, 20);
 		Double atr14 = atr(valid, 14);
+		Double atr14Percent = atr14 == null || last == 0 ? null : atr14 / last;
 		Double relativeVolume20 = relativeVolume(valid, 20);
+		Double recentMaximumDrawdown20 = maximumDrawdown(valid, 20);
 		List<DailyPriceBar> year = valid.subList(Math.max(0, valid.size() - 252), valid.size());
 		double low52 = year.stream().map(this::close).mapToDouble(this::value).min().orElse(last);
 		double high52 = year.stream().map(this::close).mapToDouble(this::value).max().orElse(last);
@@ -119,13 +125,23 @@ public class DeterministicAnalysisEngine {
 		put(metrics, "sma200", round(sma200));
 		put(metrics, "rsi14", round(rsi14));
 		put(metrics, "return1d", round(return1d));
+		put(metrics, "return2d", round(return2d));
+		put(metrics, "return5d", round(return5d));
+		put(metrics, "return10d", round(return10d));
 		put(metrics, "return20d", round(return20d));
+		put(metrics, "annualizedVolatility5", round(volatility5));
 		put(metrics, "annualizedVolatility20", round(volatility20));
 		put(metrics, "atr14", round(atr14));
+		put(metrics, "atr14PercentOfPrice", round(atr14Percent));
 		put(metrics, "relativeVolume20", round(relativeVolume20));
+		put(metrics, "recentMaximumDrawdown20", round(recentMaximumDrawdown20));
 		put(metrics, "positionIn52WeekRange", round(position52));
-		metrics.put("support20", round(year(valid, 20).stream().map(this::close).mapToDouble(this::value).min().orElse(last)));
-		metrics.put("resistance20", round(year(valid, 20).stream().map(this::close).mapToDouble(this::value).max().orElse(last)));
+		double support20 = year(valid, 20).stream().mapToDouble(this::adjustedLow).min().orElse(last);
+		double resistance20 = year(valid, 20).stream().mapToDouble(this::adjustedHigh).max().orElse(last);
+		metrics.put("support20", round(support20));
+		metrics.put("resistance20", round(resistance20));
+		metrics.put("distanceToSupport20", round(support20 / last - 1.0));
+		metrics.put("distanceToResistance20", round(resistance20 / last - 1.0));
 		List<String> reasons = new ArrayList<>();
 		reasons.add(last > sma20 ? "Price is above its 20-session average" : "Price is below its 20-session average");
 		reasons.add(last > sma50 ? "Price is above its 50-session average" : "Price is below its 50-session average");
@@ -174,6 +190,9 @@ public class DeterministicAnalysisEngine {
 		Double stock20 = change(stock, 20);
 		Double market20 = change(market, 20);
 		Double sector20 = sector.size() >= 21 ? change(sector, 20) : null;
+		Double stock5 = change(stock, 5);
+		Double market5 = change(market, 5);
+		Double sector5 = sector.size() >= 6 ? change(sector, 5) : null;
 		double marketLast = value(close(market.getLast()));
 		Double marketSma50 = sma(market, 50);
 		Double marketSma200 = market.size() >= 200 ? sma(market, 200) : null;
@@ -183,6 +202,11 @@ public class DeterministicAnalysisEngine {
 		Map<String, Object> metrics = new LinkedHashMap<>();
 		metrics.put("marketBenchmark", "SPY");
 		metrics.put("marketRegime", regime);
+		put(metrics, "stockReturn5d", round(stock5));
+		put(metrics, "marketReturn5d", round(market5));
+		put(metrics, "relativeStrengthVsMarket5d", round(subtract(stock5, market5)));
+		put(metrics, "sectorReturn5d", round(sector5));
+		put(metrics, "relativeStrengthVsSector5d", round(subtract(stock5, sector5)));
 		put(metrics, "stockReturn20d", round(stock20));
 		put(metrics, "marketReturn20d", round(market20));
 		put(metrics, "relativeStrengthVsMarket20d", round(subtract(stock20, market20)));
@@ -335,11 +359,26 @@ public class DeterministicAnalysisEngine {
 			DailyPriceBar bar = prices.get(index);
 			if (bar.high() == null || bar.low() == null) return null;
 			double previousClose = value(close(prices.get(index - 1)));
-			double range = Math.max(value(bar.high()) - value(bar.low()),
-					Math.max(Math.abs(value(bar.high()) - previousClose), Math.abs(value(bar.low()) - previousClose)));
+			double high = adjustedHigh(bar);
+			double low = adjustedLow(bar);
+			double range = Math.max(high - low,
+					Math.max(Math.abs(high - previousClose), Math.abs(low - previousClose)));
 			total += range;
 		}
 		return total / periods;
+	}
+
+	private Double maximumDrawdown(List<DailyPriceBar> prices, int periods) {
+		List<DailyPriceBar> window = year(prices, periods);
+		if (window.isEmpty()) return null;
+		double peak = value(close(window.getFirst()));
+		double maximumDrawdown = 0;
+		for (DailyPriceBar price : window) {
+			double current = value(close(price));
+			peak = Math.max(peak, current);
+			if (peak > 0) maximumDrawdown = Math.min(maximumDrawdown, current / peak - 1.0);
+		}
+		return maximumDrawdown;
 	}
 
 	private Double relativeVolume(List<DailyPriceBar> prices, int periods) {
@@ -355,6 +394,22 @@ public class DeterministicAnalysisEngine {
 
 	private BigDecimal close(DailyPriceBar price) {
 		return price.fullyAdjustedClose() != null ? price.fullyAdjustedClose() : price.close();
+	}
+
+	private double adjustedHigh(DailyPriceBar price) {
+		return adjusted(price.high(), price);
+	}
+
+	private double adjustedLow(DailyPriceBar price) {
+		return adjusted(price.low(), price);
+	}
+
+	private double adjusted(BigDecimal priceValue, DailyPriceBar price) {
+		if (priceValue == null) return value(close(price));
+		if (price.fullyAdjustedClose() == null || price.close() == null || price.close().signum() == 0) {
+			return value(priceValue);
+		}
+		return value(priceValue) * value(price.fullyAdjustedClose()) / value(price.close());
 	}
 
 	private double value(BigDecimal value) {

@@ -9,6 +9,10 @@ import java.util.TimeZone;
 import java.util.UUID;
 
 import com.stock.analyzer.analysis.application.AnalysisRunRepository;
+import com.stock.analyzer.agent.application.ResearchConversationRepository;
+import com.stock.analyzer.agent.domain.ResearchAgentResponse;
+import com.stock.analyzer.agent.domain.ResearchSummaryResult;
+import com.stock.analyzer.agent.domain.ResearchToolCall;
 import com.stock.analyzer.analysis.domain.AnalysisComponentResult;
 import com.stock.analyzer.analysis.domain.AnalysisReport;
 import com.stock.analyzer.analysis.domain.NarrativeGeneration;
@@ -91,6 +95,9 @@ class AnalyzerApplicationIT {
 	@Autowired
 	private LlmSelectionRepository llmSelectionRepository;
 
+	@Autowired
+	private ResearchConversationRepository researchConversationRepository;
+
 	@Test
 	void contextLoadsAndRunsFoundationMigration() {
 		Integer metadataRows = jdbcTemplate.queryForObject(
@@ -130,6 +137,44 @@ class AnalyzerApplicationIT {
 				                     'llm_selection_web_research')
 				""", Integer.class);
 		assertThat(llmSelectionTables).isEqualTo(5);
+
+		Integer researchAgentTables = jdbcTemplate.queryForObject("""
+				SELECT COUNT(*) FROM information_schema.tables
+				WHERE table_schema = 'analyzer'
+				  AND table_name IN ('agent_conversation', 'agent_message',
+				                     'agent_tool_call', 'agent_conversation_summary')
+				""", Integer.class);
+		assertThat(researchAgentTables).isEqualTo(4);
+	}
+
+	@Test
+	void persistsResearchConversationMessagesToolsAndSummary() {
+		var conversation = researchConversationRepository.create("Integration research");
+		var user = researchConversationRepository.appendUserMessage(conversation.conversationId(),
+				"Explain the latest AAPL forecast");
+		var tool = new ResearchToolCall("call-1", "get_stock_forecasts", "{\"symbol\":\"AAPL\",\"limit\":5}",
+				"{\"resultCount\":1,\"data\":{}}", "COMPLETED", 12L, 1, null, null);
+		var response = new ResearchAgentResponse("resp-1", "test-model", "The latest forecast is available.",
+				100L, 20L, 120L, 30L, List.of(tool));
+		var assistant = researchConversationRepository.appendAssistantMessage(conversation.conversationId(), response);
+		var summary = new ResearchSummaryResult("resp-summary", "test-model", "AAPL forecast was discussed.",
+				50L, 10L, 60L, 15L);
+		var summarized = researchConversationRepository.saveSummary(conversation.conversationId(), 1, 2, summary);
+
+		assertThat(user.sequenceNumber()).isEqualTo(1);
+		assertThat(assistant.sequenceNumber()).isEqualTo(2);
+		assertThat(summarized.messageCount()).isEqualTo(2);
+		assertThat(summarized.summarizedMessageCount()).isEqualTo(2);
+		assertThat(summarized.summaryVersion()).isEqualTo(1);
+		assertThat(summarized.summary()).isEqualTo("AAPL forecast was discussed.");
+		assertThat(researchConversationRepository.findMessages(conversation.conversationId(), 0, 10))
+				.extracting(message -> message.role()).containsExactly("USER", "ASSISTANT");
+		assertThat(jdbcTemplate.queryForObject("""
+				SELECT COUNT(*) FROM analyzer.agent_tool_call WHERE conversation_id=?
+				""", Integer.class, conversation.conversationId())).isEqualTo(1);
+		assertThat(jdbcTemplate.queryForObject("""
+				SELECT COUNT(*) FROM analyzer.agent_conversation_summary WHERE conversation_id=?
+				""", Integer.class, conversation.conversationId())).isEqualTo(1);
 	}
 
 	@Test
@@ -274,13 +319,26 @@ class AnalyzerApplicationIT {
 		batchAnalysisRepository.refreshSummary(batchId, true);
 		LocalDate cutoff = LocalDate.of(2026, 10, 2);
 		LocalDate target = LocalDate.of(2026, 10, 5);
-		analysisDataRepository.savePrices(instrument.id(), List.of(price(cutoff, "100.00"), price(target, "102.00")));
+		analysisDataRepository.savePrices(instrument.id(), List.of(
+				price(cutoff, "100.00"), price(target, "101.00", "102.00", "99.00"),
+				price(LocalDate.of(2026, 10, 6), "99.00", "101.00", "98.00"),
+				price(LocalDate.of(2026, 10, 7), "100.00", "101.00", "99.00"),
+				price(LocalDate.of(2026, 10, 8), "101.00", "102.00", "100.00"),
+				price(LocalDate.of(2026, 10, 9), "102.00", "103.00", "101.00")));
 		var forecast = new LlmForecastResult(UUID.randomUUID(), runId, instrument.id(), "AAPL", cutoff, target,
 				"AVAILABLE", "UP", 68, "MEDIUM", "Evidence favors an upward close",
 				List.of("Positive momentum"), List.of("High valuation"), List.of("Unexpected news"), List.of(),
 				LlmForecastService.SCORE_INTERPRETATION, "OPENAI", "test-model", "llm-next-session-v2",
-				"b".repeat(64), 100L, 50L, 150L, 25L, null, null, Instant.now(), null);
+				"b".repeat(64), 100L, 50L, 150L, 25L, null, null, Instant.now(), null,
+				1, Instant.now(), 2.0, 2.0, 65, 20, 45);
 		llmForecastRepository.save(forecast, Map.of("symbol", "AAPL", "cutoffDate", cutoff.toString()));
+		var fiveSessionForecast = new LlmForecastResult(UUID.randomUUID(), runId, instrument.id(), "AAPL", cutoff,
+				LocalDate.of(2026, 10, 9), "AVAILABLE", "UP", 64, "MEDIUM", "Five-session evidence",
+				List.of("Momentum"), List.of("Event risk"), List.of("Volatility"), List.of(),
+				LlmForecastService.SCORE_INTERPRETATION, "OPENAI", "test-model", "llm-multi-horizon-v5",
+				"f".repeat(64), 100L, 50L, 150L, 25L, null, null, Instant.now(), null,
+				5, Instant.now(), 2.0, 2.0, 70, 25, 45);
+		llmForecastRepository.save(fiveSessionForecast, Map.of("symbol", "AAPL", "cutoffDate", cutoff.toString()));
 		Map<String, Object> storedIdentity = jdbcTemplate.queryForMap("""
 				SELECT symbol, stock_name
 				FROM analyzer.llm_forecast
@@ -301,12 +359,23 @@ class AnalyzerApplicationIT {
 			assertThat(item.symbol()).isEqualTo("AAPL");
 			assertThat(item.upScore()).isEqualTo(68);
 		});
-		assertThat(llmForecastRepository.resolveOutcomes(instrument.id())).isEqualTo(1);
+		assertThat(llmForecastRepository.resolveOutcomes(instrument.id())).isEqualTo(2);
 		assertThat(llmForecastRepository.findBySymbol("AAPL", 10)).anySatisfy(stored -> {
 			assertThat(stored.upScore()).isEqualTo(68);
 			assertThat(stored.outcome().actualUp()).isTrue();
 			assertThat(stored.outcome().correct()).isTrue();
+			assertThat(stored.outcome().upsideTargetTouched()).isTrue();
+			assertThat(stored.outcome().downsideTargetTouched()).isFalse();
+			assertThat(stored.outcome().touchSequence()).isEqualTo("TARGET_ONLY");
 		});
+		assertThat(llmForecastRepository.findBySymbol("AAPL", 10)).filteredOn(stored -> stored.horizonTradingSessions() == 5)
+				.singleElement().satisfies(stored -> {
+					assertThat(stored.outcome().upsideTargetTouched()).isTrue();
+					assertThat(stored.outcome().downsideTargetTouched()).isTrue();
+					assertThat(stored.outcome().touchSequence()).isEqualTo("TARGET_FIRST");
+					assertThat(stored.outcome().upsideFirstTouchDate()).isEqualTo(LocalDate.of(2026, 10, 5));
+					assertThat(stored.outcome().downsideFirstTouchDate()).isEqualTo(LocalDate.of(2026, 10, 6));
+				});
 		assertThat(llmInformationGapRepository.find("NEW", 10)).anySatisfy(gap -> {
 			assertThat(gap.fingerprint()).isEqualTo(gapFingerprint);
 			assertThat(gap.occurrenceCount()).isEqualTo(1);
@@ -318,9 +387,9 @@ class AnalyzerApplicationIT {
 				.satisfies(gap -> assertThat(gap.resolutionNotes()).isEqualTo("Evaluate provider"));
 
 		UUID selectionId = llmSelectionRepository.create(batchId, 1, 15, 1,
-				"selection-model", "llm-top-candidate-selection-v2+web-test");
+				"selection-model", "llm-top-candidate-selection-v3+web-test", 2.0, 2.0);
 		llmSelectionRepository.markRunning(selectionId);
-		var candidate = llmSelectionRepository.loadCandidates(batchId, 1, 15).getFirst();
+		var candidate = llmSelectionRepository.loadCandidates(batchId, 1, 15, 2.0, 2.0).getFirst();
 		var selected = new LlmSelectionOutputCandidate(1, "AAPL", 70, "MEDIUM", "Best relative evidence",
 				List.of("Momentum"), List.of("Valuation"), List.of("Relative strength"),
 				List.of("Unexpected news"), List.of());
@@ -364,5 +433,11 @@ class AnalyzerApplicationIT {
 		BigDecimal value = new BigDecimal(close);
 		return new DailyPriceBar(date, value, value, value, value, BigDecimal.valueOf(1_000_000),
 				value, value, date);
+	}
+
+	private DailyPriceBar price(LocalDate date, String close, String high, String low) {
+		BigDecimal closeValue = new BigDecimal(close);
+		return new DailyPriceBar(date, closeValue, new BigDecimal(high), new BigDecimal(low), closeValue,
+				BigDecimal.valueOf(1_000_000), closeValue, closeValue, date);
 	}
 }

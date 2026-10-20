@@ -220,9 +220,12 @@ public class OpenAiResponsesLlmForecastClient implements LlmForecastClient {
 		item.put("properties", Map.of("horizonTradingSessions", Map.of("type", "integer", "enum", List.of(1, 5)),
 				"upScore", Map.of("type", "integer", "minimum", 0, "maximum", 100), "confidence", Map.of("type", "string",
 						"enum", List.of("LOW", "MEDIUM", "HIGH")), "thesis", Map.of("type", "string"),
+				"upsideTouchScore", Map.of("type", "integer", "minimum", 0, "maximum", 100),
+				"downsideTouchScore", Map.of("type", "integer", "minimum", 0, "maximum", 100),
 				"bullishEvidence", strings, "bearishEvidence", strings, "risks", strings, "dataLimitations", strings));
-		item.put("required", List.of("horizonTradingSessions", "upScore", "confidence", "thesis", "bullishEvidence",
-				"bearishEvidence", "risks", "dataLimitations")); item.put("additionalProperties", false);
+		item.put("required", List.of("horizonTradingSessions", "upScore", "upsideTouchScore", "downsideTouchScore",
+				"confidence", "thesis", "bullishEvidence", "bearishEvidence", "risks", "dataLimitations"));
+		item.put("additionalProperties", false);
 		return Map.of("type", "object", "properties", Map.of("forecasts", Map.of("type", "array", "items", item,
 				"minItems", 2, "maxItems", 2)), "required", List.of("forecasts"), "additionalProperties", false);
 	}

@@ -15,6 +15,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import com.stock.analyzer.configuration.LlmSelectionProperties;
+import com.stock.analyzer.configuration.TouchTargetProperties;
 import com.stock.analyzer.forecast.domain.LlmSelectionCandidateInput;
 import com.stock.analyzer.forecast.domain.LlmSelectionWebResearch;
 import com.stock.analyzer.forecast.domain.LlmWebSource;
@@ -47,13 +48,15 @@ public class OpenAiLlmSelectionWebResearchClient {
 			""";
 
 	private final LlmSelectionProperties properties;
+	private final TouchTargetProperties touchTarget;
 	private final ObjectMapper mapper;
 	private final MeterRegistry meters;
 	private final RestClient rest;
 
-	public OpenAiLlmSelectionWebResearchClient(LlmSelectionProperties properties, ObjectMapper mapper,
-			MeterRegistry meters) {
+	public OpenAiLlmSelectionWebResearchClient(LlmSelectionProperties properties,
+			TouchTargetProperties touchTarget, ObjectMapper mapper, MeterRegistry meters) {
 		this.properties = properties;
+		this.touchTarget = touchTarget;
 		this.mapper = mapper;
 		this.meters = meters;
 		HttpClient http = HttpClient.newBuilder().connectTimeout(properties.getConnectTimeout()).build();
@@ -204,8 +207,9 @@ public class OpenAiLlmSelectionWebResearchClient {
 	}
 
 	private String query(LlmSelectionCandidateInput candidate, int horizon) {
-		return "%s %s material news earnings guidance SEC filing verified events before %s next %d trading sessions"
+		return "%s %s catalysts and risks for touching +%.4f%% before -%.4f%% material news earnings guidance SEC filing verified events before %s next %d trading sessions"
 				.formatted(clean(candidate.symbol(), 32), clean(candidate.stockName(), 200),
+						touchTarget.getUpsidePercent(), touchTarget.getDownsidePercent(),
 						candidate.informationCutoff(), horizon);
 	}
 

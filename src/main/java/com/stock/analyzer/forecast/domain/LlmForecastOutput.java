@@ -4,6 +4,8 @@ import java.util.List;
 
 public record LlmForecastOutput(
 		int upScore,
+		int upsideTouchScore,
+		int downsideTouchScore,
 		String confidence,
 		String thesis,
 		List<String> bullishEvidence,
@@ -22,7 +24,22 @@ public record LlmForecastOutput(
 
 	public LlmForecastOutput(int upScore, String confidence, String thesis, List<String> bullishEvidence,
 			List<String> bearishEvidence, List<String> risks, List<String> dataLimitations) {
-		this(upScore, confidence, thesis, bullishEvidence, bearishEvidence, risks, dataLimitations, List.of());
+		this(upScore, upScore, 100 - upScore, confidence, thesis, bullishEvidence, bearishEvidence, risks,
+				dataLimitations, List.of());
+	}
+
+	public LlmForecastOutput(int upScore, int upsideTouchScore, int downsideTouchScore, String confidence,
+			String thesis, List<String> bullishEvidence, List<String> bearishEvidence, List<String> risks,
+			List<String> dataLimitations) {
+		this(upScore, upsideTouchScore, downsideTouchScore, confidence, thesis, bullishEvidence, bearishEvidence,
+				risks, dataLimitations, List.of());
+	}
+
+	public LlmForecastOutput(int upScore, String confidence, String thesis, List<String> bullishEvidence,
+			List<String> bearishEvidence, List<String> risks, List<String> dataLimitations,
+			List<LlmInformationRequest> informationRequests) {
+		this(upScore, upScore, 100 - upScore, confidence, thesis, bullishEvidence, bearishEvidence, risks,
+				dataLimitations, informationRequests);
 	}
 
 	private static List<String> copy(List<String> values) {

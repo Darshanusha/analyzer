@@ -48,7 +48,7 @@ class LlmForecastServiceTests {
 		when(client.isAvailable()).thenReturn(true);
 		when(client.configuredModel()).thenReturn("test-model");
 		when(client.forecast(any())).thenReturn(new LlmForecastCall(
-				new LlmForecastOutput(72, "MEDIUM", "Evidence modestly favors an upward close",
+				new LlmForecastOutput(72, 66, 21, "MEDIUM", "Evidence modestly favors an upward close",
 						List.of("Positive momentum"), List.of("High valuation"),
 						List.of("Unexpected news"), List.of("News coverage is unavailable")),
 				"test-model-snapshot", 100L, 50L, 150L));
@@ -59,12 +59,18 @@ class LlmForecastServiceTests {
 		assertThat(result.status()).isEqualTo("AVAILABLE");
 		assertThat(result.direction()).isEqualTo("UP");
 		assertThat(result.upScore()).isEqualTo(72);
-		assertThat(result.scoreInterpretation()).contains("NOT_A_PROBABILITY");
+		assertThat(result.upsideTouchScore()).isEqualTo(66);
+		assertThat(result.downsideTouchScore()).isEqualTo(21);
+		assertThat(result.touchScoreSpread()).isEqualTo(45);
+		assertThat(result.upsideThresholdPercent()).isEqualTo(2.0);
+		assertThat(result.downsideThresholdPercent()).isEqualTo(2.0);
+		assertThat(result.scoreInterpretation()).contains("NOT_PROBABILITIES");
 		assertThat(result.model()).isEqualTo("test-model-snapshot");
 		verify(repository).resolveOutcomes(instrument().id());
 		ArgumentCaptor<Map<String, Object>> snapshot = ArgumentCaptor.forClass(Map.class);
 		verify(repository).save(any(LlmForecastResult.class), snapshot.capture());
 		assertThat(snapshot.getValue()).containsEntry("symbol", "AAPL");
+		assertThat(snapshot.getValue()).containsKey("touchTargetDefinition");
 		assertThat((List<?>) snapshot.getValue().get("components")).hasSize(1);
 	}
 

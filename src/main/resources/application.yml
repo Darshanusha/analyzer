@@ -73,6 +73,10 @@ management:
         stock.analysis.llm.selection.response.duration: true
         stock.analysis.llm.selection.tool.duration: true
         stock.analysis.llm.selection.web.research.duration: true
+        stock.analysis.agent.turn.duration: true
+        stock.analysis.agent.response.duration: true
+        stock.analysis.agent.tool.duration: true
+        stock.analysis.agent.summary.duration: true
         stock.analysis.step.duration: true
   otlp:
     metrics:
@@ -117,9 +121,12 @@ analysis:
   news-lookback-days: ${ANALYSIS_NEWS_LOOKBACK_DAYS:30}
   default-wait-seconds: ${ANALYSIS_DEFAULT_WAIT_SECONDS:60}
   max-wait-seconds: ${ANALYSIS_MAX_WAIT_SECONDS:120}
+  touch-target:
+    upside-percent: ${STOCK_TARGET_UPSIDE_PERCENT:2.0}
+    downside-percent: ${STOCK_TARGET_DOWNSIDE_PERCENT:2.0}
   llm-forecast:
     enabled: ${LLM_FORECAST_ENABLED:false}
-    prompt-version: ${LLM_FORECAST_PROMPT_VERSION:llm-multi-horizon-v4}
+    prompt-version: ${LLM_FORECAST_PROMPT_VERSION:llm-multi-horizon-v5}
     up-threshold: ${LLM_FORECAST_UP_THRESHOLD:55}
     down-threshold: ${LLM_FORECAST_DOWN_THRESHOLD:45}
     recent-news-tool-enabled: ${LLM_RECENT_NEWS_TOOL_ENABLED:false}
@@ -144,7 +151,7 @@ analysis:
     enabled: ${LLM_SELECTION_ENABLED:false}
     model: ${LLM_SELECTION_MODEL:gpt-6.1-sol}
     reasoning-effort: ${LLM_SELECTION_REASONING_EFFORT:medium}
-    prompt-version: ${LLM_SELECTION_PROMPT_VERSION:llm-top-candidate-selection-v2}
+    prompt-version: ${LLM_SELECTION_PROMPT_VERSION:llm-top-candidate-selection-v3}
     candidate-limit: ${LLM_SELECTION_CANDIDATE_LIMIT:15}
     selection-limit: ${LLM_SELECTION_RESULT_LIMIT:3}
     max-database-tool-calls: ${LLM_SELECTION_MAX_DATABASE_TOOL_CALLS:12}
@@ -162,6 +169,22 @@ analysis:
     api-key: ${OPENAI_API_KEY:}
     connect-timeout: ${LLM_SELECTION_CONNECT_TIMEOUT:10s}
     read-timeout: ${LLM_SELECTION_READ_TIMEOUT:180s}
+  research-agent:
+    enabled: ${RESEARCH_AGENT_ENABLED:false}
+    model: ${RESEARCH_AGENT_MODEL:gpt-6.1-sol}
+    reasoning-effort: ${RESEARCH_AGENT_REASONING_EFFORT:medium}
+    summary-model: ${RESEARCH_AGENT_SUMMARY_MODEL:gpt-6.1-sol}
+    summary-reasoning-effort: ${RESEARCH_AGENT_SUMMARY_REASONING_EFFORT:low}
+    summary-threshold-messages: ${RESEARCH_AGENT_SUMMARY_THRESHOLD_MESSAGES:20}
+    max-tool-calls: ${RESEARCH_AGENT_MAX_TOOL_CALLS:12}
+    max-rounds: ${RESEARCH_AGENT_MAX_ROUNDS:14}
+    max-message-characters: ${RESEARCH_AGENT_MAX_MESSAGE_CHARACTERS:8000}
+    max-response-tokens: ${RESEARCH_AGENT_MAX_RESPONSE_TOKENS:4000}
+    max-summary-tokens: ${RESEARCH_AGENT_MAX_SUMMARY_TOKENS:1600}
+    base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
+    api-key: ${OPENAI_API_KEY:}
+    connect-timeout: ${RESEARCH_AGENT_CONNECT_TIMEOUT:10s}
+    read-timeout: ${RESEARCH_AGENT_READ_TIMEOUT:180s}
 
 prediction:
   model-path: ${PREDICTION_MODEL_PATH:./model-artifacts/champion.json}

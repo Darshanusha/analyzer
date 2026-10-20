@@ -12,7 +12,7 @@ public class LlmSelectionProperties {
 	private boolean enabled;
 	private String model = "gpt-6.1-sol";
 	private String reasoningEffort = "medium";
-	private String promptVersion = "llm-top-candidate-selection-v2";
+	private String promptVersion = "llm-top-candidate-selection-v3";
 	private int candidateLimit = 15;
 	private int selectionLimit = 3;
 	private int maxDatabaseToolCalls = 12;

@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit;
 import com.stock.analyzer.api.error.ApiException;
 import com.stock.analyzer.batch.application.BatchAnalysisService;
 import com.stock.analyzer.configuration.LlmSelectionProperties;
+import com.stock.analyzer.configuration.TouchTargetProperties;
 import com.stock.analyzer.forecast.domain.LlmSelectionCandidateInput;
 import com.stock.analyzer.forecast.domain.LlmSelectionCandidateResult;
 import com.stock.analyzer.forecast.domain.LlmSelectionExcludedCandidate;
@@ -43,20 +44,24 @@ public class LlmSelectionService {
 	private final BatchAnalysisService batchAnalysisService;
 	private final OpenAiLlmSelectionClient client;
 	private final LlmSelectionProperties properties;
+	private final TouchTargetProperties touchTarget;
 	private final ObjectMapper mapper;
 	private final ExecutorService executor;
 	private final MeterRegistry meters;
 
 	public LlmSelectionService(LlmSelectionRepository repository, BatchAnalysisService batchAnalysisService,
-			OpenAiLlmSelectionClient client, LlmSelectionProperties properties, ObjectMapper mapper,
+			OpenAiLlmSelectionClient client, LlmSelectionProperties properties, TouchTargetProperties touchTarget,
+			ObjectMapper mapper,
 			ExecutorService executor, MeterRegistry meters) {
 		this.repository = repository;
 		this.batchAnalysisService = batchAnalysisService;
 		this.client = client;
 		this.properties = properties;
+		this.touchTarget = touchTarget;
 		this.mapper = mapper;
 		this.executor = executor;
 		this.meters = meters;
+		touchTarget.validate();
 	}
 
 	public LlmSelectionSubmission submit(UUID batchAnalysisId, int horizonTradingSessions,
@@ -81,15 +86,19 @@ public class LlmSelectionService {
 		}
 
 		List<LlmSelectionCandidateInput> available = repository.loadCandidates(batchAnalysisId,
-				horizonTradingSessions, candidateLimit);
-		if (available.size() < selectionLimit) {
+				horizonTradingSessions, candidateLimit, touchTarget.getUpsidePercent(),
+				touchTarget.getDownsidePercent());
+		if (available.isEmpty()) {
 			throw new ApiException(HttpStatus.CONFLICT, "INSUFFICIENT_SELECTION_CANDIDATES",
 					"The batch has " + available.size() + " available horizon-" + horizonTradingSessions
-							+ " forecasts; at least " + selectionLimit + " are required");
+							+ " forecasts matching the configured +" + touchTarget.getUpsidePercent() + "%/-"
+							+ touchTarget.getDownsidePercent()
+							+ "% touch targets; rerun the batch with forceReanalysis=true when targets changed");
 		}
 
 		UUID selectionId = repository.create(batchAnalysisId, horizonTradingSessions, candidateLimit,
-				selectionLimit, properties.getModel(), selectionPromptIdentity);
+				selectionLimit, properties.getModel(), selectionPromptIdentity, touchTarget.getUpsidePercent(),
+				touchTarget.getDownsidePercent());
 		CompletableFuture<LlmSelectionState> completion = CompletableFuture.supplyAsync(
 				() -> execute(selectionId, batchAnalysisId, horizonTradingSessions, candidateLimit, selectionLimit),
 				executor);
@@ -107,7 +116,7 @@ public class LlmSelectionService {
 		repository.markRunning(selectionId);
 		try {
 			List<LlmSelectionCandidateInput> candidates = repository.loadCandidates(batchAnalysisId, horizon,
-					candidateLimit);
+					candidateLimit, touchTarget.getUpsidePercent(), touchTarget.getDownsidePercent());
 			if (candidates.size() < selectionLimit) {
 				throw new IllegalStateException("Available candidate count fell below the configured selection limit");
 			}
@@ -162,6 +171,9 @@ public class LlmSelectionService {
 			summary.put("targetSession", candidate.targetSession());
 			summary.put("informationCutoff", candidate.informationCutoff());
 			summary.put("upScore", candidate.upScore());
+			summary.put("upsideTouchScore", candidate.upsideTouchScore());
+			summary.put("downsideTouchScore", candidate.downsideTouchScore());
+			summary.put("touchScoreSpread", candidate.touchScoreSpread());
 			summary.put("confidence", candidate.confidence());
 			summary.put("thesis", candidate.thesis());
 			summary.put("dataQualityStatus", candidate.dataQualityStatus());
@@ -172,7 +184,9 @@ public class LlmSelectionService {
 			summaries.add(summary);
 		}
 		Map<String, Object> snapshot = new LinkedHashMap<>();
-		snapshot.put("objective", "Rank the strongest relative candidates; the score is not a calibrated probability");
+		snapshot.put("objective", "Select zero to the configured maximum candidates most likely to touch the upside target within the horizon while controlling downside-touch risk");
+		snapshot.put("upsideThresholdPercent", touchTarget.getUpsidePercent());
+		snapshot.put("downsideThresholdPercent", touchTarget.getDownsidePercent());
 		snapshot.put("batchAnalysisId", batchId);
 		snapshot.put("horizonTradingSessions", horizon);
 		snapshot.put("selectionLimit", selectionLimit);
@@ -184,8 +198,8 @@ public class LlmSelectionService {
 	private List<LlmSelectionCandidateResult> validateAndMerge(List<LlmSelectionCandidateInput> candidates,
 			LlmSelectionOutput output, int selectionLimit) {
 		if (output == null) throw new IllegalStateException("Selection output is missing");
-		if (output.selectedCandidates().size() != selectionLimit) {
-			throw new IllegalStateException("OpenAI must select exactly " + selectionLimit + " candidates");
+		if (output.selectedCandidates().size() > selectionLimit) {
+			throw new IllegalStateException("OpenAI may select at most " + selectionLimit + " candidates");
 		}
 		Map<String, LlmSelectionCandidateInput> inputs = new LinkedHashMap<>();
 		for (var candidate : candidates) inputs.put(normalize(candidate.symbol()), candidate);
@@ -217,12 +231,14 @@ public class LlmSelectionService {
 						input.upScore(), input.confidence(), true, chosen.rank(), chosen.selectionScore(),
 						chosen.confidence(), chosen.comparativeThesis(), chosen.bullishEvidence(),
 						chosen.bearishEvidence(), chosen.comparativeAdvantages(), chosen.invalidationRisks(),
-						chosen.dataLimitations(), null));
+						chosen.dataLimitations(), null, input.upsideTouchScore(), input.downsideTouchScore(),
+						input.touchScoreSpread()));
 			}
 			else {
 				merged.add(new LlmSelectionCandidateResult(input.forecastId(), input.symbol(), input.originalRank(),
 						input.upScore(), input.confidence(), false, null, null, null, null, List.of(), List.of(),
-						List.of(), List.of(), List.of(), exclusions.getOrDefault(symbol, "Not selected in comparative ranking")));
+						List.of(), List.of(), List.of(), exclusions.getOrDefault(symbol, "Not selected in comparative ranking"),
+						input.upsideTouchScore(), input.downsideTouchScore(), input.touchScoreSpread()));
 			}
 		}
 		merged.sort(Comparator.comparing(LlmSelectionCandidateResult::selected).reversed()
@@ -237,7 +253,8 @@ public class LlmSelectionService {
 				state.selectedCount(), state.scoreInterpretation(), state.model(), state.promptVersion(),
 				state.inputTokens(), state.outputTokens(), state.totalTokens(), state.durationMs(), state.errorCode(),
 				state.errorMessage(), reused, state.createdAt(), state.completedAt(), state.candidates(),
-				state.portfolioLevelRisks(), state.overallLimitations(), state.webResearch());
+				state.portfolioLevelRisks(), state.overallLimitations(), state.webResearch(), state.objective(),
+				state.upsideThresholdPercent(), state.downsideThresholdPercent());
 	}
 
 	private String normalize(String symbol) {
@@ -245,10 +262,14 @@ public class LlmSelectionService {
 	}
 
 	private String selectionPromptIdentity() {
-		if (!properties.isWebResearchEnabled()) return properties.getPromptVersion() + "+local-v1";
+		String targetIdentity = touchTarget.getUpsidePercent() + "|" + touchTarget.getDownsidePercent();
+		if (!properties.isWebResearchEnabled()) {
+			return properties.getPromptVersion() + "+local-" + sha256(targetIdentity).substring(0, 12);
+		}
 		String researchConfiguration = properties.getWebResearchModel() + '|'
 				+ properties.getWebResearchReasoningEffort() + '|' + properties.getWebResearchMaxRequests() + '|'
-				+ properties.getWebResearchAllowedDomains();
+				+ properties.getWebResearchAllowedDomains() + '|' + touchTarget.getUpsidePercent() + '|'
+				+ touchTarget.getDownsidePercent();
 		return properties.getPromptVersion() + "+web-" + sha256(researchConfiguration).substring(0, 12);
 	}
 

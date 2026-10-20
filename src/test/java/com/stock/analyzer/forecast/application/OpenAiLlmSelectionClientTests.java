@@ -34,10 +34,11 @@ class OpenAiLlmSelectionClientTests {
 	@Test
 	void loadsTheNewsAwareVersionedSelectionPrompt() {
 		String prompt = new LlmForecastPromptCatalog(new DefaultResourceLoader())
-				.load("llm-top-candidate-selection-v2");
+				.load("llm-top-candidate-selection-v3");
 
 		assertThat(prompt).contains("web-research result for every candidate")
-				.contains("Select exactly the requested count")
+				.contains("Select no candidate")
+				.contains("upsideTouchScore")
 				.contains("information cutoff");
 	}
 

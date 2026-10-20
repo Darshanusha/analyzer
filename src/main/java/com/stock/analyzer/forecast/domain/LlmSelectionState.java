@@ -28,7 +28,10 @@ public record LlmSelectionState(
 		List<LlmSelectionCandidateResult> candidates,
 		List<String> portfolioLevelRisks,
 		List<String> overallLimitations,
-		List<LlmSelectionWebResearch> webResearch) {
+		List<LlmSelectionWebResearch> webResearch,
+		String objective,
+		Double upsideThresholdPercent,
+		Double downsideThresholdPercent) {
 	public LlmSelectionState {
 		candidates = candidates == null ? List.of() : List.copyOf(candidates);
 		portfolioLevelRisks = portfolioLevelRisks == null ? List.of() : List.copyOf(portfolioLevelRisks);

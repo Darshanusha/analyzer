@@ -55,6 +55,36 @@
       "targets": [{ "expr": "sum(increase(stock_prediction_inference_total{application=\"analyzer\"}[1h])) by (status)", "legendFormat": "{{status}}", "refId": "A" }],
       "title": "Inference Outcomes per Hour",
       "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 16 },
+      "id": 6,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "values": false } },
+      "targets": [{ "expr": "stock_analysis_llm_touch_scored{application=\"analyzer\"}", "refId": "A" }],
+      "title": "Resolved LLM Touch Forecasts",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "max": 1, "min": 0, "unit": "percentunit" }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 9, "x": 6, "y": 16 },
+      "id": 7,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } },
+      "targets": [{ "expr": "stock_analysis_llm_touch_actual_rate{application=\"analyzer\"}", "legendFormat": "{{target}}", "refId": "A" }],
+      "title": "Observed Touch Rates",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "decimals": 4, "max": 1, "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 9, "x": 15, "y": 16 },
+      "id": 8,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } },
+      "targets": [{ "expr": "stock_analysis_llm_touch_brier_score{application=\"analyzer\"}", "legendFormat": "{{target}}", "refId": "A" }],
+      "title": "LLM Touch Brier Scores (Lower Is Better)",
+      "type": "timeseries"
     }
   ],
   "refresh": "30s",

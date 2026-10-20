@@ -250,7 +250,7 @@ public class OpenAiLlmSelectionClient {
 				"required", List.of("symbol", "reason"), "additionalProperties", false);
 		Map<String, Object> rootProperties = new LinkedHashMap<>();
 		rootProperties.put("selectedCandidates", Map.of("type", "array", "items", selected,
-				"minItems", selectionLimit, "maxItems", selectionLimit));
+				"minItems", 0, "maxItems", selectionLimit));
 		rootProperties.put("notSelected", Map.of("type", "array", "items", excluded));
 		rootProperties.put("portfolioLevelRisks", strings);
 		rootProperties.put("overallLimitations", strings);

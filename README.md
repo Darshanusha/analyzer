@@ -769,7 +769,8 @@ Phase 0 is complete. The Phase 1 deterministic analysis pipeline is also impleme
 - Benzinga news ingestion, deduplication, and stock association
 - Fundamental growth, profitability, balance-sheet, cash-flow, and valuation observations
 - Local peer/industry/sector comparison that expands as more stocks are analyzed
-- SMA20/50/200, RSI14, returns, volatility, ATR, relative volume, 52-week position, and support/resistance
+- SMA20/50/200, RSI14, 1/2/5/10/20-session returns, 5/20-session volatility, fully adjusted ATR,
+  ATR as a percentage of price, relative volume, recent drawdown, 52-week position, and support/resistance distance
 - SPY market-regime and sector-ETF relative-strength analysis
 - News event/keyword screening and an explicit data-quality component
 - A durable `analysis_run` plus one durable, versioned log row per analysis component
@@ -789,9 +790,10 @@ reasons, limitations, and at most the news headlines already present in componen
 history, full fundamental source records, news bodies, or provider credentials. The narrative remains
 `DETERMINISTIC_FALLBACK`; the LLM is used only for the separate experimental next-session forecast.
 
-An LLM `upScore` is deliberately not placed in `probabilityUp`. It is an uncalibrated comparative score from 0 to 100,
-not a statistical probability or a trade recommendation. `probabilityUp` remains reserved for a separately evaluated,
-calibrated model. The application records every LLM forecast and resolves its outcome after a later EOD bar arrives.
+An LLM `upScore`, `upsideTouchScore`, or `downsideTouchScore` is deliberately not placed in `probabilityUp`. These are
+uncalibrated comparative estimates from 0 to 100, not statistical probabilities or trade recommendations.
+`probabilityUp` remains reserved for a separately evaluated, calibrated model. The application records every LLM
+forecast and resolves its close-direction and barrier-touch outcomes after the required EOD bars arrive.
 
 Web research is separately opt-in and disabled by default. The local `get_recent_news` database tool is also disabled
 by default because an empty news store gives the model no useful evidence. While that tool is disabled, the model may
@@ -846,6 +848,8 @@ To enable the experimental OpenAI forecast, add these IntelliJ environment varia
 OPENAI_CHAT_PROVIDER=openai
 OPENAI_API_KEY=<your key>
 OPENAI_MODEL=gpt-6.1-sol
+STOCK_TARGET_UPSIDE_PERCENT=2.0
+STOCK_TARGET_DOWNSIDE_PERCENT=2.0
 LLM_FORECAST_ENABLED=true
 LLM_FILTER_PROBABILITY_THRESHOLD=0.50
 LLM_FILTER_MINIMUM_POSITIVE_SIGNALS=3
@@ -855,7 +859,7 @@ LLM_FILTER_MINIMUM_TECHNICAL_SIGNALS=1
 To permit controlled web research while keeping the empty local-news tool hidden, also configure:
 
 ```text
-LLM_FORECAST_PROMPT_VERSION=llm-multi-horizon-v4
+LLM_FORECAST_PROMPT_VERSION=llm-multi-horizon-v5
 LLM_RECENT_NEWS_TOOL_ENABLED=false
 LLM_MAX_DATABASE_TOOL_CALLS=5
 LLM_WEB_RESEARCH_ENABLED=true
@@ -939,22 +943,26 @@ curl.exe -X POST "http://localhost:8080/api/v1/batches?filter=false" -F "file=@s
 Use `GET /api/v1/batches/{batchAnalysisId}` for totals and
 `GET /api/v1/batches/{batchAnalysisId}/items` for per-symbol status and analysis-run IDs.
 
-Once some or all items have completed, retrieve the available LLM forecasts sorted by descending `upScore`:
+Once some or all items have completed, retrieve the available forecasts. New touch-target forecasts are ordered by
+`upsideTouchScore - downsideTouchScore`, then by `upsideTouchScore`:
 
 ```powershell
 curl.exe "http://localhost:8080/api/v1/batches/{batchAnalysisId}/llm-rankings"
 ```
 
-The ranking response declares `scoreType` as
-`UNCALIBRATED_LLM_UP_SCORE_0_TO_100_NOT_A_PROBABILITY_OR_TRADE_RECOMMENDATION`. A score of 50 means balanced evidence;
+The ranking response retains the original directional fields and also returns the configured upside/downside target
+percentages, touch scores, their spread, and resolved touch outcomes when available. `scoreType` declares
+`UNCALIBRATED_LLM_DIRECTION_AND_TOUCH_SCORES_0_TO_100_NOT_PROBABILITIES_OR_TRADE_RECOMMENDATIONS`.
+An `upScore` of 50 means balanced directional evidence;
 scores of 55 or higher map to `UP`, scores of 45 or lower map to `DOWN`, and the middle range maps to `UNCERTAIN`.
 
 ### Ask a second LLM call to select the strongest candidates
 
-After a batch has reached a terminal state, the application can take the highest-scoring forecasts for one horizon and
+After a batch has reached a terminal state, the application can take the highest risk-adjusted touch forecasts for one horizon and
 run a separate comparative LLM analysis. This call uses its own `LLM_SELECTION_*` configuration, prompt, model,
 token metrics, database-tool budget, persistence tables, and API result. By default it compares the top 15 available
-candidates and returns exactly three selections. The comparative `selectionScore` is not a calibrated probability or a
+candidates and returns zero to three selections. Returning zero is valid when none has a defensible upside-touch versus
+downside-touch setup. The comparative `selectionScore` is not a calibrated probability or a
 trade recommendation.
 
 Enable and configure it in IntelliJ VM options:
@@ -963,7 +971,7 @@ Enable and configure it in IntelliJ VM options:
 -DLLM_SELECTION_ENABLED=true
 -DLLM_SELECTION_MODEL=gpt-6.1-sol
 -DLLM_SELECTION_REASONING_EFFORT=medium
--DLLM_SELECTION_PROMPT_VERSION=llm-top-candidate-selection-v2
+-DLLM_SELECTION_PROMPT_VERSION=llm-top-candidate-selection-v3
 -DLLM_SELECTION_CANDIDATE_LIMIT=15
 -DLLM_SELECTION_RESULT_LIMIT=3
 -DLLM_SELECTION_MAX_DATABASE_TOOL_CALLS=12
@@ -996,7 +1004,7 @@ curl.exe "http://localhost:8080/api/v1/llm-selections/{selectionId}"
 ```
 
 The selector requests one bounded hosted web-search response for every candidate, so the default top-15 comparison can
-make up to 15 web-research requests before the final top-three ranking. Searches are sequential to avoid a rate-limit
+make up to 15 web-research requests before the final zero-to-three ranking. Searches are sequential to avoid a rate-limit
 burst, use the candidate's original information cutoff to prevent look-ahead leakage, and are restricted to configured
 trusted domains. A failed search is recorded as a limitation and does not become negative stock evidence. Every source
 URL returned by OpenAI is post-validated against the same domain allowlist.
@@ -1124,9 +1132,17 @@ docker compose --profile containerized-app up --build -d
 
 The current LLM workflow uses the OpenAI Responses API with `store=false`. One stateless conversation produces both
 the 1-session and 5-session assessments. The application replays typed response items and function outputs between
-rounds; OpenAI does not retain the conversation for the application. Both values are uncalibrated comparative
-`upScore` values, not probabilities. The five-session target is whether the close after exactly five completed U.S.
-trading sessions is above the analysis-cutoff close.
+rounds; OpenAI does not retain the conversation for the application. Each horizon includes an uncalibrated directional
+`upScore`, an `upsideTouchScore`, and a `downsideTouchScore`. The touch scores need not sum to 100 because both barriers
+may be reached within one horizon.
+
+The default five-session target succeeds when the fully adjusted intraday high touches +2% at any point during the next
+five completed U.S. trading sessions. Downside risk records whether the fully adjusted intraday low touches -2% during
+the same window. Configure the magnitudes with `STOCK_TARGET_UPSIDE_PERCENT` and
+`STOCK_TARGET_DOWNSIDE_PERCENT`. Sharadar supplies split-adjusted OHLC and fully adjusted close; the application derives
+fully adjusted highs/lows as `high|low * close_fully_adjusted / close_split_adjusted`. Outcomes store first-touch dates,
+maximum return, maximum drawdown, fifth-session return, and whether the sequence was `TARGET_FIRST`, `DOWNSIDE_FIRST`,
+`SAME_SESSION_AMBIGUOUS`, `TARGET_ONLY`, `DOWNSIDE_ONLY`, or `NEITHER`.
 
 The model can make at most five calls to the read-only database tools (`get_available_stock_data`, `get_price_history`,
 `get_fundamental_history`, `get_market_context`, and `get_sector_context`). `get_recent_news` is added only when
@@ -1200,3 +1216,55 @@ Run unit tests plus the real PostgreSQL/Flyway integration test:
 ```
 
 The integration profile requires a working Docker engine.
+
+## Persistent research-agent conversations
+
+The personal research agent provides a read-only conversational layer over stored analyses, forecasts, batches,
+candidate selections, web-research audits, and resolved forecast performance. It cannot execute arbitrary SQL or
+write analysis data. Every message and tool call is persisted in PostgreSQL.
+
+Enable it with these VM arguments:
+
+```text
+-DRESEARCH_AGENT_ENABLED=true
+-DRESEARCH_AGENT_MODEL=gpt-6.1-sol
+-DRESEARCH_AGENT_REASONING_EFFORT=medium
+-DRESEARCH_AGENT_SUMMARY_MODEL=gpt-6.1-sol
+-DRESEARCH_AGENT_SUMMARY_REASONING_EFFORT=low
+-DRESEARCH_AGENT_SUMMARY_THRESHOLD_MESSAGES=20
+-DRESEARCH_AGENT_MAX_TOOL_CALLS=12
+-DRESEARCH_AGENT_MAX_ROUNDS=14
+```
+
+Create a conversation:
+
+```powershell
+curl.exe -X POST "http://localhost:8080/api/v1/agent/conversations" `
+  -H "Content-Type: application/json" `
+  -d '{"title":"Daily stock research"}'
+```
+
+Send a message using the returned `conversationId`:
+
+```powershell
+curl.exe -X POST "http://localhost:8080/api/v1/agent/conversations/{conversationId}/messages" `
+  -H "Content-Type: application/json" `
+  -d '{"message":"Which five-session stocks ranked highest in batch 62d08b3a-b675-471b-bdea-2fec2c11cfd8, and why?"}'
+```
+
+Read the durable conversation metadata and messages:
+
+```text
+GET /api/v1/agent/conversations
+GET /api/v1/agent/conversations/{conversationId}
+GET /api/v1/agent/conversations/{conversationId}/messages?limit=100
+```
+
+The default `RESEARCH_AGENT_SUMMARY_THRESHOLD_MESSAGES=20` means summarization runs after twenty unsummarized stored
+messages (normally ten user/assistant exchanges). Original rows are never deleted. The current compact memory is stored
+in `agent_conversation.current_summary`, and every version is retained in `agent_conversation_summary`. Later calls send
+the current summary plus messages created after that summary, which bounds context growth while preserving a complete
+local audit trail.
+
+Available read-only tools are `get_stock_analysis`, `get_stock_forecasts`, `get_batch_status`, `get_batch_rankings`,
+`get_selection_result`, and `get_forecast_performance`. Tool arguments and results are recorded in `agent_tool_call`.

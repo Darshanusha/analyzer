@@ -32,7 +32,14 @@ public class LlmDatabaseToolExecutor {
 					""").param("id", instrumentId).param("cutoff", cutoff).query().listOfRows();
 			case "get_price_history" -> jdbc.sql("""
 					SELECT price_date, open_split_adjusted AS open, high_split_adjusted AS high,
-					       low_split_adjusted AS low, close_split_adjusted AS close, volume_split_adjusted AS volume
+					       low_split_adjusted AS low, close_split_adjusted AS close, volume_split_adjusted AS volume,
+					       close_fully_adjusted,
+					       CASE WHEN close_fully_adjusted IS NOT NULL AND close_split_adjusted <> 0
+					            THEN high_split_adjusted * close_fully_adjusted / close_split_adjusted
+					            ELSE high_split_adjusted END AS high_fully_adjusted,
+					       CASE WHEN close_fully_adjusted IS NOT NULL AND close_split_adjusted <> 0
+					            THEN low_split_adjusted * close_fully_adjusted / close_split_adjusted
+					            ELSE low_split_adjusted END AS low_fully_adjusted
 					FROM analyzer.daily_price_bar WHERE instrument_id=:id AND price_date<=:cutoff
 					ORDER BY price_date DESC LIMIT :limit
 					""").param("id", instrumentId).param("cutoff", cutoff).param("limit", limit).query().listOfRows();
@@ -70,7 +77,8 @@ public class LlmDatabaseToolExecutor {
 
 	private List<Map<String, Object>> benchmark(String symbol, LocalDate cutoff, int limit) {
 		return jdbc.sql("""
-				SELECT i.current_symbol AS symbol, p.price_date, p.close_split_adjusted AS close
+				SELECT i.current_symbol AS symbol, p.price_date,
+				       COALESCE(p.close_fully_adjusted, p.close_split_adjusted) AS adjusted_close
 				FROM analyzer.instrument i JOIN analyzer.daily_price_bar p ON p.instrument_id=i.id
 				WHERE i.current_symbol=:symbol AND p.price_date<=:cutoff
 				ORDER BY p.price_date DESC LIMIT :limit

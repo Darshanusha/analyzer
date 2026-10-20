@@ -1,0 +1,152 @@
+{
+  "info": {
+    "_postman_id": "821c6eba-a26c-4a51-9256-98abaf9a120d",
+    "name": "AI Stock Analyzer - Persistent Research Agent",
+    "description": "Creates one durable research conversation, asks a database-backed question, asks a contextual follow-up, and retrieves the stored history.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080", "type": "string" },
+    { "key": "conversationId", "value": "", "type": "string" },
+    { "key": "batchAnalysisId", "value": "62d08b3a-b675-471b-bdea-2fec2c11cfd8", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "01 - Create conversation",
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "pm.test('Conversation was created', function () { pm.response.to.have.status(201); });",
+            "const body = pm.response.json();",
+            "pm.expect(body.conversationId).to.be.a('string').and.not.empty;",
+            "pm.collectionVariables.set('conversationId', body.conversationId);",
+            "console.log('conversationId=' + body.conversationId);"
+          ]
+        }
+      }],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"title\": \"Daily stock research\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/agent/conversations",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "agent", "conversations"]
+        }
+      }
+    },
+    {
+      "name": "02 - Ask about a batch",
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "pm.test('Agent answered', function () { pm.response.to.have.status(200); });",
+            "const body = pm.response.json();",
+            "pm.expect(body.assistantMessage.content).to.be.a('string').and.not.empty;",
+            "console.log('Agent answer:', body.assistantMessage.content);",
+            "console.log('Tool calls:', body.toolCalls);"
+          ]
+        }
+      }],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"message\": \"Show the highest five-session forecasts in batch {{batchAnalysisId}} and explain their important limitations.\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/agent/conversations/{{conversationId}}/messages",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "agent", "conversations", "{{conversationId}}", "messages"]
+        }
+      }
+    },
+    {
+      "name": "03 - Ask contextual follow-up",
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "pm.test('Agent retained conversation context', function () { pm.response.to.have.status(200); });",
+            "const body = pm.response.json();",
+            "console.log('Follow-up answer:', body.assistantMessage.content);",
+            "console.log('messageCount=' + body.messageCount + ', summaryVersion=' + body.summaryVersion);"
+          ]
+        }
+      }],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"message\": \"Compare the top two you just mentioned and tell me what additional stored evidence supports each one.\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/agent/conversations/{{conversationId}}/messages",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "agent", "conversations", "{{conversationId}}", "messages"]
+        }
+      }
+    },
+    {
+      "name": "04 - Get stored messages",
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "pm.test('Stored messages were returned', function () { pm.response.to.have.status(200); });",
+            "const messages = pm.response.json();",
+            "pm.expect(messages.length).to.be.at.least(4);",
+            "console.log('Stored messages:', messages);"
+          ]
+        }
+      }],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/agent/conversations/{{conversationId}}/messages?limit=100",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "agent", "conversations", "{{conversationId}}", "messages"],
+          "query": [{ "key": "limit", "value": "100" }]
+        }
+      }
+    },
+    {
+      "name": "05 - Get conversation metadata",
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "pm.test('Conversation metadata was returned', function () { pm.response.to.have.status(200); });",
+            "const body = pm.response.json();",
+            "console.log('messageCount=' + body.messageCount + ', summarizedMessageCount=' + body.summarizedMessageCount + ', summaryVersion=' + body.summaryVersion);"
+          ]
+        }
+      }],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/agent/conversations/{{conversationId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "agent", "conversations", "{{conversationId}}"]
+        }
+      }
+    }
+  ]
+}

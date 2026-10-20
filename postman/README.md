@@ -27,3 +27,9 @@ Important collection variables:
 
 The polling scripts use Postman's collection-runner flow control. When requests are sent manually, click **Send** on
 the polling request again until the returned status is terminal.
+
+## Persistent research agent
+
+Import `stock-analyzer-research-agent.postman_collection.json` after enabling the research agent. The collection creates
+a conversation, stores its ID automatically, asks a database-backed batch question, asks a contextual follow-up, and
+then reads the complete stored history. Change its `batchAnalysisId` collection variable to one of your completed batches.
