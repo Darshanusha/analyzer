@@ -4,7 +4,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 
 public record CreateLlmSelectionRequest(
-        @Min(1) @Max(5) Integer horizonTradingSessions,
+        @Min(5) @Max(5) Integer horizonTradingSessions,
         Boolean waitForCompletion,
         @Min(1) @Max(120) Integer maximumWaitSeconds,
         Boolean forceReselection) {

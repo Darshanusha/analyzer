@@ -186,7 +186,7 @@ public class AnalysisService {
 			recordStep("baseline_prediction", stepStarted);
 			stepStarted = System.nanoTime();
 			LlmForecastResult llmForecast = llmForecastService.forecast(runId, instrument, priceCutoff,
-					prediction.targetSession(), quality.status(), components, filter);
+					quality.status(), components, filter);
 			List<LlmForecastResult> llmForecasts = llmForecastService.forAnalysisRun(runId);
 			if (llmForecasts == null || llmForecasts.isEmpty()) llmForecasts = List.of(llmForecast);
 			llmForecasts.forEach(forecast -> components.add(llmForecastComponent(forecast)));

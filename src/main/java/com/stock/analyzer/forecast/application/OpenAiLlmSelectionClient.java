@@ -11,8 +11,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 
 import com.stock.analyzer.configuration.LlmSelectionProperties;
+import com.stock.analyzer.provider.ExternalRequestExecutor;
 import com.stock.analyzer.forecast.domain.AiInteractionAudit;
 import com.stock.analyzer.forecast.domain.AiToolCallAudit;
 import com.stock.analyzer.forecast.domain.LlmSelectionCall;
@@ -24,6 +27,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.web.client.RestClient;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
@@ -45,16 +49,21 @@ public class OpenAiLlmSelectionClient {
 	private final MeterRegistry meters;
 	private final String instructions;
 	private final RestClient rest;
+	private final ExternalRequestExecutor requests;
+	private final ExecutorService executorService;
 
 	public OpenAiLlmSelectionClient(LlmSelectionProperties properties, LlmDatabaseToolExecutor executor,
 			OpenAiLlmSelectionWebResearchClient webResearchClient, ObjectMapper mapper, MeterRegistry meters,
-			LlmForecastPromptCatalog prompts) {
+			LlmForecastPromptCatalog prompts, ExternalRequestExecutor requests,
+			@Qualifier("analysisExecutor") ExecutorService executorService) {
 		this.properties = properties;
 		this.executor = executor;
 		this.webResearchClient = webResearchClient;
 		this.mapper = mapper;
 		this.meters = meters;
 		this.instructions = prompts.load(properties.getPromptVersion());
+		this.requests = requests;
+		this.executorService = executorService;
 		HttpClient http = HttpClient.newBuilder().connectTimeout(properties.getConnectTimeout()).build();
 		JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(http);
 		factory.setReadTimeout(properties.getReadTimeout());
@@ -173,11 +182,11 @@ public class OpenAiLlmSelectionClient {
 			throw new IllegalStateException("Selection web research request limit " + requests
 					+ " is lower than candidate count " + candidates.size());
 		}
-		List<LlmSelectionWebResearch> results = new ArrayList<>();
-		for (LlmSelectionCandidateInput candidate : candidates.stream().limit(requests).toList()) {
-			results.add(webResearchClient.research(candidate, horizon));
-		}
-		return List.copyOf(results);
+		List<CompletableFuture<LlmSelectionWebResearch>> tasks = candidates.stream().limit(requests)
+				.map(candidate -> CompletableFuture.supplyAsync(
+						() -> webResearchClient.research(candidate, horizon), executorService))
+				.toList();
+		return tasks.stream().map(CompletableFuture::join).toList();
 	}
 
 	private List<AiInteractionAudit> researchInteractions(List<LlmSelectionWebResearch> research,
@@ -210,8 +219,9 @@ public class OpenAiLlmSelectionClient {
 				"strict", true, "schema", outputSchema(selectionLimit))));
 		body.put("include", List.of("reasoning.encrypted_content"));
 		body.put("store", false);
-		String value = rest.post().uri("/responses").header(HttpHeaders.AUTHORIZATION, "Bearer " + properties.getApiKey())
-				.contentType(MediaType.APPLICATION_JSON).body(body).retrieve().body(String.class);
+		String value = requests.openAi("selection", () -> rest.post().uri("/responses")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + properties.getApiKey())
+				.contentType(MediaType.APPLICATION_JSON).body(body).retrieve().body(String.class));
 		if (!text(value)) throw new IllegalStateException("OpenAI returned an empty selection response");
 		try { return mapper.readTree(value); }
 		catch (JacksonException exception) { throw new IllegalStateException("Invalid OpenAI selection JSON", exception); }

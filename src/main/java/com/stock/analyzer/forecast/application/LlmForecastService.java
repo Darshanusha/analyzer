@@ -46,6 +46,7 @@ import tools.jackson.databind.ObjectMapper;
 
 @Service
 public class LlmForecastService {
+	private static final int FORECAST_HORIZON_TRADING_SESSIONS = 5;
 
 	public static final String SCORE_INTERPRETATION =
 			"UNCALIBRATED_LLM_DIRECTION_AND_TOUCH_SCORES_0_TO_100_NOT_PROBABILITIES_OR_TRADE_RECOMMENDATIONS";
@@ -103,16 +104,18 @@ public class LlmForecastService {
 	}
 
 	public LlmForecastResult forecast(UUID analysisRunId, Instrument instrument, LocalDate cutoffDate,
-			LocalDate targetSession, String dataQualityStatus, List<AnalysisComponentResult> components) {
-		return forecast(analysisRunId, instrument, cutoffDate, targetSession, dataQualityStatus, components, false);
+			String dataQualityStatus, List<AnalysisComponentResult> components) {
+		return forecast(analysisRunId, instrument, cutoffDate, dataQualityStatus, components, false);
 	}
 
 	public LlmForecastResult forecast(UUID analysisRunId, Instrument instrument, LocalDate cutoffDate,
-			LocalDate targetSession, String dataQualityStatus, List<AnalysisComponentResult> components,
+			String dataQualityStatus, List<AnalysisComponentResult> components,
 			boolean filterEnabled) {
 		long started = System.nanoTime();
 		UUID forecastId = UUID.randomUUID();
 		Instant informationCutoff = Instant.now(clock);
+		LocalDate targetSession = new UsMarketCalendar().addTradingSessions(
+				cutoffDate, FORECAST_HORIZON_TRADING_SESSIONS);
 		repository.resolveOutcomes(instrument.id());
 		Map<String, Object> snapshot = inputSnapshot(instrument, cutoffDate, targetSession,
 				dataQualityStatus, components, informationCutoff);
@@ -178,30 +181,14 @@ public class LlmForecastService {
 					clean(output.bullishEvidence()), clean(output.bearishEvidence()), clean(output.risks()),
 					clean(output.dataLimitations()), SCORE_INTERPRETATION, "OPENAI", call.model(),
 					properties.getPromptVersion(), inputSha256, call.inputTokens(), call.outputTokens(), call.totalTokens(),
-					elapsedMillis(started), null, null, Instant.now(clock), null, 1, informationCutoff,
+					elapsedMillis(started), null, null, Instant.now(clock), null,
+					FORECAST_HORIZON_TRADING_SESSIONS, informationCutoff,
 					touchTarget.getUpsidePercent(), touchTarget.getDownsidePercent(), output.upsideTouchScore(),
 					output.downsideTouchScore(), output.upsideTouchScore() - output.downsideTouchScore());
 			log.info("LLM forecast completed: analysisRunId={}, symbol={}, direction={}, upScore={}, upsideTouchScore={}, downsideTouchScore={}, confidence={}, model={}",
 					analysisRunId, instrument.symbol(), direction, output.upScore(), output.upsideTouchScore(),
 					output.downsideTouchScore(), output.confidence(), call.model());
 			LlmForecastResult saved = save(result, snapshot, started);
-			for (var horizon : call.forecasts()) {
-				if (horizon.horizonTradingSessions() == 1) continue;
-				LlmForecastOutput value = validate(horizon.asForecastOutput());
-				int sessions = horizon.horizonTradingSessions();
-				LlmForecastResult additional = new LlmForecastResult(UUID.randomUUID(), analysisRunId,
-						instrument.id(), instrument.symbol(), cutoffDate,
-						new UsMarketCalendar().addTradingSessions(cutoffDate, sessions), "AVAILABLE",
-						direction(value.upScore()), value.upScore(), value.confidence().toUpperCase(Locale.ROOT),
-						clean(value.thesis(), 1_000), clean(value.bullishEvidence()), clean(value.bearishEvidence()),
-						clean(value.risks()), clean(value.dataLimitations()), SCORE_INTERPRETATION, "OPENAI",
-						call.model(), properties.getPromptVersion(), inputSha256, call.inputTokens(), call.outputTokens(),
-						call.totalTokens(), elapsedMillis(started), null, null, Instant.now(clock), null,
-						sessions, informationCutoff, touchTarget.getUpsidePercent(), touchTarget.getDownsidePercent(),
-						value.upsideTouchScore(), value.downsideTouchScore(),
-						value.upsideTouchScore() - value.downsideTouchScore());
-				save(additional, snapshot, started);
-			}
 			recordAudits(audits);
 			return saved;
 		}
@@ -237,8 +224,8 @@ public class LlmForecastService {
 	}
 
 	public BatchLlmRankingResponse rankings(UUID batchAnalysisId, String batchStatus, int horizon) {
-		if (horizon != 1 && horizon != 5) throw new ApiException(HttpStatus.BAD_REQUEST,
-				"INVALID_FORECAST_HORIZON", "horizon must be 1 or 5 trading sessions");
+		if (horizon != FORECAST_HORIZON_TRADING_SESSIONS) throw new ApiException(HttpStatus.BAD_REQUEST,
+				"INVALID_FORECAST_HORIZON", "horizon must be 5 trading sessions");
 		List<BatchLlmRankingItem> rankings = repository.findBatchRankings(batchAnalysisId, horizon);
 		return new BatchLlmRankingResponse(batchAnalysisId, batchStatus, SCORE_INTERPRETATION,
 				"Experimental research ranking only; the score is not a calibrated probability or a recommendation to buy.",
@@ -246,7 +233,7 @@ public class LlmForecastService {
 	}
 
 	public BatchLlmRankingResponse rankings(UUID batchAnalysisId, String batchStatus) {
-		return rankings(batchAnalysisId, batchStatus, 1);
+		return rankings(batchAnalysisId, batchStatus, FORECAST_HORIZON_TRADING_SESSIONS);
 	}
 
 	public LlmForecastPerformanceSummary performanceSummary() {
@@ -301,14 +288,15 @@ public class LlmForecastService {
 				cutoffDate, targetSession, status, "UNCERTAIN", null, "LOW", message,
 				List.of(), List.of(), List.of(), List.of(message), SCORE_INTERPRETATION, "OPENAI",
 				client.configuredModel(), properties.getPromptVersion(), inputSha256, null, null, null,
-				elapsedMillis(started), errorCode, message, Instant.now(clock), null, 1, Instant.now(clock),
+				elapsedMillis(started), errorCode, message, Instant.now(clock), null,
+				FORECAST_HORIZON_TRADING_SESSIONS, Instant.now(clock),
 				touchTarget.getUpsidePercent(), touchTarget.getDownsidePercent(), null, null, null);
 	}
 
 	private Map<String, Object> inputSnapshot(Instrument instrument, LocalDate cutoffDate, LocalDate targetSession,
 			String dataQualityStatus, List<AnalysisComponentResult> components, Instant informationCutoff) {
 		Map<String, Object> snapshot = new LinkedHashMap<>();
-		snapshot.put("schemaVersion", 3);
+		snapshot.put("schemaVersion", 4);
 		snapshot.put("instrumentId", instrument.id());
 		snapshot.put("symbol", instrument.symbol());
 		snapshot.put("companyName", instrument.name());
@@ -317,7 +305,7 @@ public class LlmForecastService {
 		snapshot.put("cutoffDate", cutoffDate);
 		snapshot.put("targetSession", targetSession);
 		snapshot.put("informationCutoff", informationCutoff);
-		snapshot.put("horizonsTradingSessions", List.of(1, 5));
+		snapshot.put("horizonTradingSessions", FORECAST_HORIZON_TRADING_SESSIONS);
 		snapshot.put("touchTargetDefinition", Map.of(
 				"upsidePercent", touchTarget.getUpsidePercent(),
 				"downsidePercent", touchTarget.getDownsidePercent(),

@@ -12,6 +12,7 @@ import com.stock.analyzer.agent.domain.ResearchMessage;
 import com.stock.analyzer.agent.domain.ResearchSummaryResult;
 import com.stock.analyzer.agent.domain.ResearchToolCall;
 import com.stock.analyzer.configuration.ResearchAgentProperties;
+import com.stock.analyzer.provider.ExternalRequestExecutor;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,13 +47,15 @@ public class OpenAiResearchAgentClient {
 	private final ObjectMapper mapper;
 	private final MeterRegistry meters;
 	private final RestClient rest;
+	private final ExternalRequestExecutor requests;
 
 	public OpenAiResearchAgentClient(ResearchAgentProperties properties, ResearchAgentToolExecutor tools,
-			ObjectMapper mapper, MeterRegistry meters) {
+			ObjectMapper mapper, MeterRegistry meters, ExternalRequestExecutor requests) {
 		this.properties = properties;
 		this.tools = tools;
 		this.mapper = mapper;
 		this.meters = meters;
+		this.requests = requests;
 		HttpClient http = HttpClient.newBuilder().connectTimeout(properties.getConnectTimeout()).build();
 		JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(http);
 		factory.setReadTimeout(properties.getReadTimeout());
@@ -182,9 +185,9 @@ public class OpenAiResearchAgentClient {
 		}
 		body.put("store", false);
 		try {
-			String value = rest.post().uri("/responses")
+			String value = requests.openAi("research_agent", () -> rest.post().uri("/responses")
 					.header(HttpHeaders.AUTHORIZATION, "Bearer " + properties.getApiKey())
-					.contentType(MediaType.APPLICATION_JSON).body(body).retrieve().body(String.class);
+					.contentType(MediaType.APPLICATION_JSON).body(body).retrieve().body(String.class));
 			if (!text(value)) throw new IllegalStateException("OpenAI returned an empty response");
 			return mapper.readTree(value);
 		}
@@ -215,13 +218,13 @@ public class OpenAiResearchAgentClient {
 				function("get_batch_status", "Read a batch summary and its per-symbol statuses and errors.",
 						Map.of("batchAnalysisId", string("Batch UUID"), "limit", integer(1, 600)), List.of("batchAnalysisId", "limit")),
 				function("get_batch_rankings", "Read ranked available forecasts for a batch and horizon.",
-						Map.of("batchAnalysisId", string("Batch UUID"), "horizonTradingSessions", integerEnum(1, 5),
+						Map.of("batchAnalysisId", string("Batch UUID"), "horizonTradingSessions", integerEnum(5),
 								"limit", integer(1, 100)), List.of("batchAnalysisId", "horizonTradingSessions", "limit")),
 				function("get_selection_result", "Read a top-candidate selection, all candidates, and audited web research.",
 						Map.of("selectionId", string("Selection UUID")), List.of("selectionId")),
 				function("get_forecast_performance", "Read resolved forecast accuracy for one symbol or the whole universe.",
 						Map.of("symbol", string("Symbol, or an empty string for all symbols"),
-								"horizonTradingSessions", integerEnum(1, 5)), List.of("symbol", "horizonTradingSessions")));
+								"horizonTradingSessions", integerEnum(5)), List.of("symbol", "horizonTradingSessions")));
 	}
 
 	private Map<String, Object> function(String name, String description, Map<String, Object> properties,
@@ -239,8 +242,8 @@ public class OpenAiResearchAgentClient {
 		return Map.of("type", "integer", "minimum", minimum, "maximum", maximum);
 	}
 
-	private Map<String, Object> integerEnum(int first, int second) {
-		return Map.of("type", "integer", "enum", List.of(first, second));
+	private Map<String, Object> integerEnum(int only) {
+		return Map.of("type", "integer", "enum", List.of(only));
 	}
 
 	private int maxToolCalls() { return Math.max(0, Math.min(properties.getMaxToolCalls(), HARD_MAX_TOOL_CALLS)); }

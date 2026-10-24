@@ -4,6 +4,8 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.stock.analyzer.analysis.application.AnalysisService;
 import com.stock.analyzer.analysis.application.AnalysisSubmission;
@@ -15,6 +17,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import io.micrometer.core.instrument.MeterRegistry;
 
 @Service
@@ -25,17 +28,31 @@ public class BatchAnalysisService {
 	private final BatchAnalysisRepository repository;
 	private final AnalysisService analysisService;
 	private final ExecutorService executor;
+	private final ExecutorService itemExecutor;
 	private final MeterRegistry meters;
+	private final AtomicInteger queuedItems = new AtomicInteger();
+	private final AtomicInteger inFlightItems = new AtomicInteger();
 
 	@Autowired
 	public BatchAnalysisService(BatchAnalysisRepository repository, AnalysisService analysisService,
-			ExecutorService executor, MeterRegistry meters) {
-		this.repository = repository; this.analysisService = analysisService; this.executor = executor; this.meters = meters;
+			@Qualifier("analysisExecutor") ExecutorService executor,
+			@Qualifier("batchItemExecutor") ExecutorService itemExecutor, MeterRegistry meters) {
+		this.repository = repository;
+		this.analysisService = analysisService;
+		this.executor = executor;
+		this.itemExecutor = itemExecutor;
+		this.meters = meters;
+		meters.gauge("stock.analysis.batch.items.queued", queuedItems);
+		meters.gauge("stock.analysis.batch.items.in.flight", inFlightItems);
 	}
 
 	public BatchAnalysisService(BatchAnalysisRepository repository, AnalysisService analysisService,
 			ExecutorService executor) {
-		this(repository, analysisService, executor, null);
+		this.repository = repository;
+		this.analysisService = analysisService;
+		this.executor = executor;
+		this.itemExecutor = executor;
+		this.meters = null;
 	}
 
 	public BatchAnalysisState submit(List<String> symbols) {
@@ -84,9 +101,39 @@ public class BatchAnalysisService {
 	}
 
 	private void process(UUID batchId, List<String> symbols, boolean forceReanalysis, boolean filter) {
-		log.info("Starting batch analysis: batchId={}, items={}, filter={}", batchId, symbols.size(), filter);
+		log.info("Starting parallel batch analysis: batchId={}, items={}, filter={}", batchId, symbols.size(), filter);
 		repository.markRunning(batchId);
-		for (String symbol : symbols) {
+		queuedItems.addAndGet(symbols.size());
+		AtomicInteger completedItems = new AtomicInteger();
+		List<CompletableFuture<Void>> tasks = symbols.stream()
+				.map(symbol -> CompletableFuture.runAsync(
+						() -> processItem(batchId, symbol, forceReanalysis, filter, completedItems, symbols.size()),
+						itemExecutor))
+				.toList();
+		CompletableFuture.allOf(tasks.toArray(CompletableFuture[]::new)).join();
+		repository.refreshSummary(batchId, true);
+		BatchAnalysisState completed = get(batchId);
+		List<BatchAnalysisItemState> items = repository.findItems(batchId);
+		long reused = items.stream().filter(BatchAnalysisItemState::reusedExistingAnalysis).count();
+		long filtered = items.stream().filter(i -> "FILTERED_OUT".equals(i.llmForecastStatus())).count();
+		long available = items.stream().filter(i -> "AVAILABLE".equals(i.llmForecastStatus())).count();
+		long abstained = items.stream().filter(i -> "ABSTAINED".equals(i.llmForecastStatus())).count();
+		log.info("Completed batch analysis: batchId={}, status={}, total={}, reused={}, passedFilter={}, filtered={}, "
+				+ "abstained={}, llmSuccessful={}, failed={}", batchId, completed.status(), items.size(), reused,
+				Math.max(0, items.size() - filtered), filtered, abstained, available, completed.failedItems());
+		if (meters != null) {
+			meters.counter("stock.analysis.batch.items", "outcome", "reused").increment(reused);
+			meters.counter("stock.analysis.batch.items", "outcome", "filtered").increment(filtered);
+			meters.counter("stock.analysis.batch.items", "outcome", "llm_available").increment(available);
+			meters.counter("stock.analysis.batch.items", "outcome", "failed").increment(completed.failedItems());
+		}
+	}
+
+	private void processItem(UUID batchId, String symbol, boolean forceReanalysis, boolean filter,
+			AtomicInteger completedItems, int totalItems) {
+		queuedItems.decrementAndGet();
+		inFlightItems.incrementAndGet();
+		try {
 			try {
 				AnalysisSubmission submission = analysisService.submit(symbol, forceReanalysis, filter);
 				repository.linkAnalysis(batchId, symbol, submission.analysisRunId());
@@ -107,22 +154,12 @@ public class BatchAnalysisService {
 						batchId, symbol, errorCode, errorMessage);
 			}
 			repository.refreshSummary(batchId, false);
+			int completed = completedItems.incrementAndGet();
+			log.info("Batch progress: batchId={}, completedItems={}, totalItems={}, queuedItems={}, inFlightItems={}",
+					batchId, completed, totalItems, queuedItems.get(), inFlightItems.get());
 		}
-		repository.refreshSummary(batchId, true);
-		BatchAnalysisState completed = get(batchId);
-		List<BatchAnalysisItemState> items = repository.findItems(batchId);
-		long reused = items.stream().filter(BatchAnalysisItemState::reusedExistingAnalysis).count();
-		long filtered = items.stream().filter(i -> "FILTERED_OUT".equals(i.llmForecastStatus())).count();
-		long available = items.stream().filter(i -> "AVAILABLE".equals(i.llmForecastStatus())).count();
-		long abstained = items.stream().filter(i -> "ABSTAINED".equals(i.llmForecastStatus())).count();
-		log.info("Completed batch analysis: batchId={}, status={}, total={}, reused={}, passedFilter={}, filtered={}, "
-				+ "abstained={}, llmSuccessful={}, failed={}", batchId, completed.status(), items.size(), reused,
-				Math.max(0, items.size() - filtered), filtered, abstained, available, completed.failedItems());
-		if (meters != null) {
-			meters.counter("stock.analysis.batch.items", "outcome", "reused").increment(reused);
-			meters.counter("stock.analysis.batch.items", "outcome", "filtered").increment(filtered);
-			meters.counter("stock.analysis.batch.items", "outcome", "llm_available").increment(available);
-			meters.counter("stock.analysis.batch.items", "outcome", "failed").increment(completed.failedItems());
+		finally {
+			inFlightItems.decrementAndGet();
 		}
 	}
 

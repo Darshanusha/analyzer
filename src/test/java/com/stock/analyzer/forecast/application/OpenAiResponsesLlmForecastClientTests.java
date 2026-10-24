@@ -1,6 +1,8 @@
 package com.stock.analyzer.forecast.application;
 
 import com.stock.analyzer.configuration.LlmForecastProperties;
+import com.stock.analyzer.configuration.ConcurrencyProperties;
+import com.stock.analyzer.provider.ExternalRequestExecutor;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.observation.ObservationRegistry;
 import org.junit.jupiter.api.Test;
@@ -48,9 +50,11 @@ class OpenAiResponsesLlmForecastClientTests {
 	}
 
 	private OpenAiResponsesLlmForecastClient client(LlmForecastProperties properties) {
+		SimpleMeterRegistry meters = new SimpleMeterRegistry();
 		return new OpenAiResponsesLlmForecastClient(properties, mock(LlmDatabaseToolExecutor.class),
-				new ObjectMapper(), new SimpleMeterRegistry(), ObservationRegistry.NOOP,
+				new ObjectMapper(), meters, ObservationRegistry.NOOP,
 				new MockEnvironment().withProperty("spring.ai.openai.chat.options.model", "gpt-6-luna"),
-				new LlmForecastPromptCatalog(new DefaultResourceLoader()));
+				new LlmForecastPromptCatalog(new DefaultResourceLoader()),
+				new ExternalRequestExecutor(new ConcurrencyProperties(), meters));
 	}
 }

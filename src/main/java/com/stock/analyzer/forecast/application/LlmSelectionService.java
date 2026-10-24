@@ -148,9 +148,9 @@ public class LlmSelectionService {
 	}
 
 	private void validateConfiguration(int horizon) {
-		if (horizon != 1 && horizon != 5) {
+		if (horizon != 5) {
 			throw new ApiException(HttpStatus.BAD_REQUEST, "UNSUPPORTED_SELECTION_HORIZON",
-					"horizonTradingSessions must be either 1 or 5");
+					"horizonTradingSessions must be 5");
 		}
 		if (!client.isAvailable()) {
 			throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "LLM_SELECTION_NOT_CONFIGURED",

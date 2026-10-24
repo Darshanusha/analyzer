@@ -200,7 +200,7 @@ public class ResearchAgentToolExecutor {
 
 	private int horizon(JsonNode arguments) {
 		int value = arguments.path("horizonTradingSessions").asInt(5);
-		if (value != 1 && value != 5) throw new IllegalArgumentException("horizonTradingSessions must be 1 or 5");
+		if (value != 5) throw new IllegalArgumentException("horizonTradingSessions must be 5");
 		return value;
 	}
 

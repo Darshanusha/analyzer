@@ -161,6 +161,41 @@
       ],
       "title": "Selection LLM and Tool p95",
       "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 57 },
+      "id": 16,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true } },
+      "targets": [
+        { "expr": "stock_analysis_batch_items_in_flight{application=\"analyzer\"}", "legendFormat": "batch in flight", "refId": "A" },
+        { "expr": "stock_analysis_batch_items_queued{application=\"analyzer\"}", "legendFormat": "batch queued", "refId": "B" },
+        { "expr": "stock_analysis_external_requests_in_flight{application=\"analyzer\"}", "legendFormat": "{{provider}} in flight", "refId": "C" },
+        { "expr": "stock_analysis_external_requests_queued{application=\"analyzer\"}", "legendFormat": "{{provider}} queued", "refId": "D" }
+      ],
+      "title": "Parallel Work and Provider Concurrency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 57 },
+      "id": 17,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true } },
+      "targets": [{ "expr": "sum(increase(stock_analysis_external_request_retries_total{application=\"analyzer\"}[$__range])) by (provider, operation)", "legendFormat": "{{provider}} {{operation}}", "refId": "A" }],
+      "title": "External Request Retries",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 57 },
+      "id": 18,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true } },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(stock_analysis_external_request_duration_seconds_bucket{application=\"analyzer\"}[5m])) by (le, provider, operation))", "legendFormat": "{{provider}} {{operation}}", "refId": "A" }],
+      "title": "External Request p95 Latency",
+      "type": "timeseries"
     }
   ],
   "refresh": "15s",

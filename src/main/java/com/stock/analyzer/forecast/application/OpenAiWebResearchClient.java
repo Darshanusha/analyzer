@@ -15,6 +15,7 @@ import com.stock.analyzer.configuration.LlmForecastProperties;
 import com.stock.analyzer.forecast.domain.LlmInformationRequest;
 import com.stock.analyzer.forecast.domain.LlmWebResearchResult;
 import com.stock.analyzer.forecast.domain.LlmWebSource;
+import com.stock.analyzer.provider.ExternalRequestExecutor;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,12 +44,14 @@ public class OpenAiWebResearchClient implements LlmWebResearchClient {
 	private final ObjectMapper objectMapper;
 	private final MeterRegistry meterRegistry;
 	private final RestClient restClient;
+	private final ExternalRequestExecutor requests;
 
 	public OpenAiWebResearchClient(LlmForecastProperties forecastProperties, ObjectMapper objectMapper,
-			MeterRegistry meterRegistry) {
+			MeterRegistry meterRegistry, ExternalRequestExecutor requests) {
 		this.properties = forecastProperties.getWebResearch();
 		this.objectMapper = objectMapper;
 		this.meterRegistry = meterRegistry;
+		this.requests = requests;
 		String baseUrl = properties.getBaseUrl() == null ? "" : properties.getBaseUrl().replaceAll("/+$", "");
 		HttpClient httpClient = HttpClient.newBuilder()
 				.connectTimeout(properties.getConnectTimeout()).build();
@@ -72,11 +75,11 @@ public class OpenAiWebResearchClient implements LlmWebResearchClient {
 		}
 		long started = System.nanoTime();
 		try {
-			String responseBody = restClient.post().uri("/responses")
+			String responseBody = requests.openAi("forecast_web_research", () -> restClient.post().uri("/responses")
 					.header(HttpHeaders.AUTHORIZATION, "Bearer " + properties.getApiKey())
 					.contentType(MediaType.APPLICATION_JSON)
 					.body(requestBody(symbol, informationCutoff, request))
-					.retrieve().body(String.class);
+					.retrieve().body(String.class));
 			if (!hasText(responseBody)) {
 				throw new IllegalStateException("OpenAI web search returned an empty response");
 			}

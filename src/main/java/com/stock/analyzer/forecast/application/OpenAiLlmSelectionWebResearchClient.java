@@ -19,6 +19,7 @@ import com.stock.analyzer.configuration.TouchTargetProperties;
 import com.stock.analyzer.forecast.domain.LlmSelectionCandidateInput;
 import com.stock.analyzer.forecast.domain.LlmSelectionWebResearch;
 import com.stock.analyzer.forecast.domain.LlmWebSource;
+import com.stock.analyzer.provider.ExternalRequestExecutor;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,13 +53,16 @@ public class OpenAiLlmSelectionWebResearchClient {
 	private final ObjectMapper mapper;
 	private final MeterRegistry meters;
 	private final RestClient rest;
+	private final ExternalRequestExecutor requests;
 
 	public OpenAiLlmSelectionWebResearchClient(LlmSelectionProperties properties,
-			TouchTargetProperties touchTarget, ObjectMapper mapper, MeterRegistry meters) {
+			TouchTargetProperties touchTarget, ObjectMapper mapper, MeterRegistry meters,
+			ExternalRequestExecutor requests) {
 		this.properties = properties;
 		this.touchTarget = touchTarget;
 		this.mapper = mapper;
 		this.meters = meters;
+		this.requests = requests;
 		HttpClient http = HttpClient.newBuilder().connectTimeout(properties.getConnectTimeout()).build();
 		JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(http);
 		factory.setReadTimeout(properties.getReadTimeout());
@@ -75,10 +79,10 @@ public class OpenAiLlmSelectionWebResearchClient {
 		long started = System.nanoTime();
 		String query = query(candidate, horizon);
 		try {
-			String body = rest.post().uri("/responses")
+			String body = requests.selectionWebResearch("selection_web_research", () -> rest.post().uri("/responses")
 					.header(HttpHeaders.AUTHORIZATION, "Bearer " + properties.getApiKey())
 					.contentType(MediaType.APPLICATION_JSON).body(requestBody(candidate, horizon, query))
-					.retrieve().body(String.class);
+					.retrieve().body(String.class));
 			if (!text(body)) throw new IllegalStateException("OpenAI selection web search returned an empty response");
 			LlmSelectionWebResearch result = parse(candidate, body, started);
 			record(result);

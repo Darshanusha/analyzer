@@ -325,20 +325,13 @@ class AnalyzerApplicationIT {
 				price(LocalDate.of(2026, 10, 7), "100.00", "101.00", "99.00"),
 				price(LocalDate.of(2026, 10, 8), "101.00", "102.00", "100.00"),
 				price(LocalDate.of(2026, 10, 9), "102.00", "103.00", "101.00")));
-		var forecast = new LlmForecastResult(UUID.randomUUID(), runId, instrument.id(), "AAPL", cutoff, target,
-				"AVAILABLE", "UP", 68, "MEDIUM", "Evidence favors an upward close",
-				List.of("Positive momentum"), List.of("High valuation"), List.of("Unexpected news"), List.of(),
-				LlmForecastService.SCORE_INTERPRETATION, "OPENAI", "test-model", "llm-next-session-v2",
-				"b".repeat(64), 100L, 50L, 150L, 25L, null, null, Instant.now(), null,
-				1, Instant.now(), 2.0, 2.0, 65, 20, 45);
-		llmForecastRepository.save(forecast, Map.of("symbol", "AAPL", "cutoffDate", cutoff.toString()));
-		var fiveSessionForecast = new LlmForecastResult(UUID.randomUUID(), runId, instrument.id(), "AAPL", cutoff,
+		var forecast = new LlmForecastResult(UUID.randomUUID(), runId, instrument.id(), "AAPL", cutoff,
 				LocalDate.of(2026, 10, 9), "AVAILABLE", "UP", 64, "MEDIUM", "Five-session evidence",
 				List.of("Momentum"), List.of("Event risk"), List.of("Volatility"), List.of(),
-				LlmForecastService.SCORE_INTERPRETATION, "OPENAI", "test-model", "llm-multi-horizon-v5",
+				LlmForecastService.SCORE_INTERPRETATION, "OPENAI", "test-model", "llm-five-session-v6",
 				"f".repeat(64), 100L, 50L, 150L, 25L, null, null, Instant.now(), null,
 				5, Instant.now(), 2.0, 2.0, 70, 25, 45);
-		llmForecastRepository.save(fiveSessionForecast, Map.of("symbol", "AAPL", "cutoffDate", cutoff.toString()));
+		llmForecastRepository.save(forecast, Map.of("symbol", "AAPL", "cutoffDate", cutoff.toString()));
 		Map<String, Object> storedIdentity = jdbcTemplate.queryForMap("""
 				SELECT symbol, stock_name
 				FROM analyzer.llm_forecast
@@ -357,17 +350,9 @@ class AnalyzerApplicationIT {
 		assertThat(llmForecastRepository.findBatchRankings(batchId)).singleElement().satisfies(item -> {
 			assertThat(item.rank()).isEqualTo(1);
 			assertThat(item.symbol()).isEqualTo("AAPL");
-			assertThat(item.upScore()).isEqualTo(68);
+			assertThat(item.upScore()).isEqualTo(64);
 		});
-		assertThat(llmForecastRepository.resolveOutcomes(instrument.id())).isEqualTo(2);
-		assertThat(llmForecastRepository.findBySymbol("AAPL", 10)).anySatisfy(stored -> {
-			assertThat(stored.upScore()).isEqualTo(68);
-			assertThat(stored.outcome().actualUp()).isTrue();
-			assertThat(stored.outcome().correct()).isTrue();
-			assertThat(stored.outcome().upsideTargetTouched()).isTrue();
-			assertThat(stored.outcome().downsideTargetTouched()).isFalse();
-			assertThat(stored.outcome().touchSequence()).isEqualTo("TARGET_ONLY");
-		});
+		assertThat(llmForecastRepository.resolveOutcomes(instrument.id())).isEqualTo(1);
 		assertThat(llmForecastRepository.findBySymbol("AAPL", 10)).filteredOn(stored -> stored.horizonTradingSessions() == 5)
 				.singleElement().satisfies(stored -> {
 					assertThat(stored.outcome().upsideTargetTouched()).isTrue();
@@ -386,10 +371,10 @@ class AnalyzerApplicationIT {
 		assertThat(llmInformationGapRepository.find("PLANNED", 10)).singleElement()
 				.satisfies(gap -> assertThat(gap.resolutionNotes()).isEqualTo("Evaluate provider"));
 
-		UUID selectionId = llmSelectionRepository.create(batchId, 1, 15, 1,
+		UUID selectionId = llmSelectionRepository.create(batchId, 5, 15, 1,
 				"selection-model", "llm-top-candidate-selection-v3+web-test", 2.0, 2.0);
 		llmSelectionRepository.markRunning(selectionId);
-		var candidate = llmSelectionRepository.loadCandidates(batchId, 1, 15, 2.0, 2.0).getFirst();
+		var candidate = llmSelectionRepository.loadCandidates(batchId, 5, 15, 2.0, 2.0).getFirst();
 		var selected = new LlmSelectionOutputCandidate(1, "AAPL", 70, "MEDIUM", "Best relative evidence",
 				List.of("Momentum"), List.of("Valuation"), List.of("Relative strength"),
 				List.of("Unexpected news"), List.of());
@@ -404,7 +389,7 @@ class AnalyzerApplicationIT {
 				100L, 20L, 120L, 50L, 0, 1, null, null, List.of(tool));
 		var call = new LlmSelectionCall(output, "selection-model", 100L, 20L, 120L,
 				List.of(interaction), List.of(research), Map.of("candidateSymbols", List.of("AAPL")));
-		var selectedResult = new LlmSelectionCandidateResult(candidate.forecastId(), "AAPL", 1, 68,
+		var selectedResult = new LlmSelectionCandidateResult(candidate.forecastId(), "AAPL", 1, 64,
 				"MEDIUM", true, 1, 70, "MEDIUM", "Best relative evidence", List.of("Momentum"),
 				List.of("Valuation"), List.of("Relative strength"), List.of("Unexpected news"), List.of(), null);
 		llmSelectionRepository.complete(selectionId, call.inputSnapshot(), "e".repeat(64), call,

@@ -10,7 +10,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class LlmForecastProperties {
 
 	private boolean enabled;
-	private String promptVersion = "llm-multi-horizon-v5";
+	private String promptVersion = "llm-five-session-v6";
 	private int upThreshold = 55;
 	private int downThreshold = 45;
 	private boolean recentNewsToolEnabled;

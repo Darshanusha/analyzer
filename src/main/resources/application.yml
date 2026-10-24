@@ -78,6 +78,7 @@ management:
         stock.analysis.agent.tool.duration: true
         stock.analysis.agent.summary.duration: true
         stock.analysis.step.duration: true
+        stock.analysis.external.request.duration: true
   otlp:
     metrics:
       export:
@@ -121,12 +122,22 @@ analysis:
   news-lookback-days: ${ANALYSIS_NEWS_LOOKBACK_DAYS:30}
   default-wait-seconds: ${ANALYSIS_DEFAULT_WAIT_SECONDS:60}
   max-wait-seconds: ${ANALYSIS_MAX_WAIT_SECONDS:120}
+  concurrency:
+    batch-max-concurrent-items: ${BATCH_ANALYSIS_MAX_CONCURRENCY:4}
+    batch-queue-capacity: ${BATCH_ANALYSIS_QUEUE_CAPACITY:600}
+    open-ai-max-concurrent-requests: ${OPENAI_MAX_CONCURRENT_REQUESTS:4}
+    selection-web-research-max-concurrent-requests: ${LLM_SELECTION_WEB_RESEARCH_MAX_CONCURRENCY:4}
+    sharadar-max-concurrent-requests: ${SHARADAR_MAX_CONCURRENT_REQUESTS:2}
+    permit-timeout: ${EXTERNAL_REQUEST_PERMIT_TIMEOUT:5m}
+    transient-max-retries: ${EXTERNAL_REQUEST_MAX_RETRIES:2}
+    initial-retry-delay: ${EXTERNAL_REQUEST_INITIAL_RETRY_DELAY:1s}
+    maximum-retry-delay: ${EXTERNAL_REQUEST_MAX_RETRY_DELAY:30s}
   touch-target:
-    upside-percent: ${STOCK_TARGET_UPSIDE_PERCENT:2.0}
+    upside-percent: ${STOCK_TARGET_UPSIDE_PERCENT:3.0}
     downside-percent: ${STOCK_TARGET_DOWNSIDE_PERCENT:2.0}
   llm-forecast:
     enabled: ${LLM_FORECAST_ENABLED:false}
-    prompt-version: ${LLM_FORECAST_PROMPT_VERSION:llm-multi-horizon-v5}
+    prompt-version: ${LLM_FORECAST_PROMPT_VERSION:llm-five-session-v6}
     up-threshold: ${LLM_FORECAST_UP_THRESHOLD:55}
     down-threshold: ${LLM_FORECAST_DOWN_THRESHOLD:45}
     recent-news-tool-enabled: ${LLM_RECENT_NEWS_TOOL_ENABLED:false}
@@ -139,7 +150,7 @@ analysis:
       enabled: ${LLM_WEB_RESEARCH_ENABLED:false}
       base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
       api-key: ${OPENAI_API_KEY:}
-      model: ${OPENAI_WEB_SEARCH_MODEL:gpt-5.5}
+      model: ${OPENAI_WEB_SEARCH_MODEL:gpt-6-luna}
       reasoning-effort: ${LLM_WEB_RESEARCH_REASONING_EFFORT:low}
       connect-timeout: ${LLM_WEB_RESEARCH_CONNECT_TIMEOUT:10s}
       read-timeout: ${LLM_WEB_RESEARCH_READ_TIMEOUT:180s}
@@ -159,9 +170,9 @@ analysis:
     web-research-enabled: ${LLM_SELECTION_WEB_RESEARCH_ENABLED:true}
     web-research-required: ${LLM_SELECTION_WEB_RESEARCH_REQUIRED:true}
     web-research-max-requests: ${LLM_SELECTION_WEB_RESEARCH_MAX_REQUESTS:15}
-    web-research-model: ${LLM_SELECTION_WEB_RESEARCH_MODEL:gpt-6.1-sol}
+    web-research-model: ${LLM_SELECTION_WEB_RESEARCH_MODEL:gpt-6-luna}
     web-research-reasoning-effort: ${LLM_SELECTION_WEB_RESEARCH_REASONING_EFFORT:low}
-    web-research-allowed-domains: ${LLM_SELECTION_WEB_RESEARCH_ALLOWED_DOMAINS:sec.gov,data.sec.gov,reuters.com,nasdaq.com,nyse.com,federalreserve.gov,bls.gov,bea.gov}
+    web-research-allowed-domains: ${LLM_SELECTION_WEB_RESEARCH_ALLOWED_DOMAINS:sec.gov,data.sec.gov,reuters.com,apnews.com,nasdaq.com,nyse.com,federalreserve.gov,bls.gov,bea.gov}
     web-research-max-summary-characters: ${LLM_SELECTION_WEB_RESEARCH_MAX_SUMMARY_CHARACTERS:4000}
     default-wait-seconds: ${LLM_SELECTION_DEFAULT_WAIT_SECONDS:60}
     max-wait-seconds: ${LLM_SELECTION_MAX_WAIT_SECONDS:120}

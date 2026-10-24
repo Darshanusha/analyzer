@@ -24,7 +24,7 @@ public interface LlmForecastRepository {
 	List<BatchLlmRankingItem> findBatchRankings(UUID batchAnalysisId, int horizonTradingSessions);
 
 	default List<BatchLlmRankingItem> findBatchRankings(UUID batchAnalysisId) {
-		return findBatchRankings(batchAnalysisId, 1);
+		return findBatchRankings(batchAnalysisId, 5);
 	}
 
 	LlmForecastPerformanceSummary performanceSummary();

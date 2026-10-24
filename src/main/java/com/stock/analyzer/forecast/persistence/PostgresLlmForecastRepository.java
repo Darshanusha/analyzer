@@ -283,6 +283,7 @@ public class PostgresLlmForecastRepository implements LlmForecastRepository {
 				FROM analyzer.llm_forecast f
 				JOIN analyzer.llm_forecast_outcome o ON o.llm_forecast_id = f.id
 				WHERE f.status = 'AVAILABLE'
+				  AND f.horizon_trading_sessions = 5
 				""").query((rs, row) -> new LlmForecastPerformanceSummary(rs.getLong("scored"),
 				doubleOrNull(rs, "accuracy"), doubleOrNull(rs, "average_score"),
 				doubleOrNull(rs, "actual_up_rate"), rs.getLong("touch_scored"),

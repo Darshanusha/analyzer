@@ -850,6 +850,15 @@ OPENAI_API_KEY=<your key>
 OPENAI_MODEL=gpt-6.1-sol
 STOCK_TARGET_UPSIDE_PERCENT=2.0
 STOCK_TARGET_DOWNSIDE_PERCENT=2.0
+BATCH_ANALYSIS_MAX_CONCURRENCY=4
+BATCH_ANALYSIS_QUEUE_CAPACITY=600
+OPENAI_MAX_CONCURRENT_REQUESTS=4
+LLM_SELECTION_WEB_RESEARCH_MAX_CONCURRENCY=4
+SHARADAR_MAX_CONCURRENT_REQUESTS=2
+EXTERNAL_REQUEST_PERMIT_TIMEOUT=5m
+EXTERNAL_REQUEST_MAX_RETRIES=2
+EXTERNAL_REQUEST_INITIAL_RETRY_DELAY=1s
+EXTERNAL_REQUEST_MAX_RETRY_DELAY=30s
 LLM_FORECAST_ENABLED=true
 LLM_FILTER_PROBABILITY_THRESHOLD=0.50
 LLM_FILTER_MINIMUM_POSITIVE_SIGNALS=3
@@ -859,7 +868,7 @@ LLM_FILTER_MINIMUM_TECHNICAL_SIGNALS=1
 To permit controlled web research while keeping the empty local-news tool hidden, also configure:
 
 ```text
-LLM_FORECAST_PROMPT_VERSION=llm-multi-horizon-v5
+LLM_FORECAST_PROMPT_VERSION=llm-five-session-v6
 LLM_RECENT_NEWS_TOOL_ENABLED=false
 LLM_MAX_DATABASE_TOOL_CALLS=5
 LLM_WEB_RESEARCH_ENABLED=true
@@ -876,9 +885,12 @@ Keep the API key in environment variables, never VM arguments, source files, or 
 use structured output and `store=false`. The model may request at most five database function calls. With
 `LLM_RECENT_NEWS_TOOL_ENABLED=false`, `get_recent_news` is not exposed and up to five hosted web-search calls are
 available. Setting the flag to `true` exposes stored news and reduces hosted web search to at most one call. These are
-upper bounds: the model may use fewer calls when the supplied evidence is sufficient. The existing sequential batch
-processor avoids a sudden rate-limit burst, but web research can materially increase latency and cost for large
-batches. Web research has its own configurable connection and read timeouts.
+upper bounds: the model may use fewer calls when the supplied evidence is sufficient. Batch symbols and second-stage
+candidate web searches run concurrently, but all paid-provider traffic is protected by global configurable limits.
+The defaults allow four concurrent batch items and OpenAI requests, four concurrent selection web searches, and two
+concurrent Sharadar requests. `429`, `503`, connection, and read-timeout failures are retried up to the configured
+budget with `Retry-After` support or exponential backoff with jitter. Dependent tool-calling rounds remain sequential.
+Start with these defaults and lower `OPENAI_MAX_CONCURRENT_REQUESTS` if the project reports throttling.
 
 ### Analyze one stock
 
@@ -920,7 +932,9 @@ curl.exe -X POST "http://localhost:8080/api/v1/batches?filter=true" -F "file=@st
 
 Batch processing also reuses today's successful analyses by default. Each item reports
 `reusedExistingAnalysis: true` when reused. The batch response records the selected `filter` value, and each item
-reports `llmForecastStatus`; stocks rejected by Java have `FILTERED_OUT` and are not sent to OpenAI.
+reports `llmForecastStatus`; stocks rejected by Java have `FILTERED_OUT` and are not sent to OpenAI. Independent
+symbols execute in parallel up to `BATCH_ANALYSIS_MAX_CONCURRENCY`; the bounded queue and global provider limits stop
+an uploaded file or multiple batches from creating unbounded external traffic.
 
 The default Java filter first uses `probabilityUp >= 0.50` when a promoted compatible Java model is available.
 Otherwise it requires at least three positive deterministic signals, including at least one technical signal. Signals
@@ -1128,15 +1142,15 @@ docker compose --profile containerized-app up --build -d
 | Analyzer metrics | `http://localhost:8080/actuator/prometheus` |
 | Grafana | `http://localhost:3000` |
 
-### Multi-horizon Responses workflow
+### Five-session Responses workflow
 
-The current LLM workflow uses the OpenAI Responses API with `store=false`. One stateless conversation produces both
-the 1-session and 5-session assessments. The application replays typed response items and function outputs between
-rounds; OpenAI does not retain the conversation for the application. Each horizon includes an uncalibrated directional
+The current LLM workflow uses the OpenAI Responses API with `store=false`. One stateless conversation produces one
+5-session assessment. The application replays typed response items and function outputs between rounds; OpenAI does
+not retain the conversation for the application. The forecast includes an uncalibrated directional
 `upScore`, an `upsideTouchScore`, and a `downsideTouchScore`. The touch scores need not sum to 100 because both barriers
 may be reached within one horizon.
 
-The default five-session target succeeds when the fully adjusted intraday high touches +2% at any point during the next
+The default five-session target succeeds when the fully adjusted intraday high touches +3% at any point during the next
 five completed U.S. trading sessions. Downside risk records whether the fully adjusted intraday low touches -2% during
 the same window. Configure the magnitudes with `STOCK_TARGET_UPSIDE_PERCENT` and
 `STOCK_TARGET_DOWNSIDE_PERCENT`. Sharadar supplies split-adjusted OHLC and fully adjusted close; the application derives
@@ -1151,18 +1165,19 @@ hosted web-search calls restricted to the configured domain allowlist. Enabling 
 search to one call. Tool inputs are schema constrained, row limited, and fixed to the analyzed instrument and
 information cutoff. Arbitrary SQL and arbitrary HTTP access are not exposed.
 
-The response retains `llmForecast` as the one-session result and adds `llmForecasts` containing both horizons. Batch
-rankings default to one session; select the five-session ranking with:
+Both `llmForecast` and the single entry in `llmForecasts` represent the five-session forecast. Batch rankings default
+to five sessions:
 
 ```text
 GET /api/v1/batches/{batchAnalysisId}/llm-rankings?horizon=5
 ```
 
-PostgreSQL stores one `llm_forecast` row per analysis and horizon. `ai_interaction` stores every successful Responses
+PostgreSQL stores one new `llm_forecast` row per analysis. Historical one-session rows remain readable but new analyses
+create only horizon-5 rows. `ai_interaction` stores every successful Responses
 round and its token/latency totals; `ai_tool_call` stores each database or web-search tool call, status, duration, and
 bounded result count. Prometheus exposes OpenAI tokens, response counts and latency, tool counts and latency, filter
-outcomes, forecast score distributions, and batch outcomes. Grafana's Application Overview dashboard includes panels
-for token use, DB/web tool calls, p50/p95/p99 response latency, tool latency, and batch results.
+outcomes, forecast score distributions, batch outcomes, queued/in-flight work, provider concurrency, transient retries,
+and provider latency. Grafana's Application Overview dashboard includes panels for these values.
 | Prometheus | `http://localhost:9090` |
 | Tempo | `http://localhost:3200` |
 | Loki | `http://localhost:3100/ready` |

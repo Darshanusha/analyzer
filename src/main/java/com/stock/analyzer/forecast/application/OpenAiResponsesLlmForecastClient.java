@@ -13,6 +13,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import com.stock.analyzer.configuration.LlmForecastProperties;
+import com.stock.analyzer.provider.ExternalRequestExecutor;
 import com.stock.analyzer.forecast.domain.AiInteractionAudit;
 import com.stock.analyzer.forecast.domain.AiToolCallAudit;
 import com.stock.analyzer.forecast.domain.LlmForecastCall;
@@ -47,10 +48,11 @@ public class OpenAiResponsesLlmForecastClient implements LlmForecastClient {
 	private final String model;
 	private final String instructions;
 	private final RestClient rest;
+	private final ExternalRequestExecutor requests;
 
 	public OpenAiResponsesLlmForecastClient(LlmForecastProperties properties, LlmDatabaseToolExecutor tools,
 			ObjectMapper mapper, MeterRegistry meters, ObservationRegistry observations,
-			Environment environment, LlmForecastPromptCatalog prompts) {
+			Environment environment, LlmForecastPromptCatalog prompts, ExternalRequestExecutor requests) {
 		this.properties = properties;
 		this.tools = tools;
 		this.mapper = mapper;
@@ -58,6 +60,7 @@ public class OpenAiResponsesLlmForecastClient implements LlmForecastClient {
 		this.observations = observations;
 		this.model = environment.getProperty("spring.ai.openai.chat.options.model", "gpt-6.1-sol");
 		this.instructions = prompts.load(properties.getPromptVersion());
+		this.requests = requests;
 		var web = properties.getWebResearch();
 		HttpClient http = HttpClient.newBuilder().connectTimeout(web.getConnectTimeout()).build();
 		JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(http);
@@ -152,9 +155,9 @@ public class OpenAiResponsesLlmForecastClient implements LlmForecastClient {
 				}
 				conversation.addAll(outputs);
 			}
-			if (forecasts.isEmpty()) throw new IllegalStateException("OpenAI returned no structured multi-horizon forecast");
-			LlmHorizonForecastOutput primary = forecasts.stream().filter(f -> f.horizonTradingSessions() == 1)
-					.findFirst().orElseThrow(() -> new IllegalStateException("One-session forecast is missing"));
+			if (forecasts.isEmpty()) throw new IllegalStateException("OpenAI returned no structured five-session forecast");
+			LlmHorizonForecastOutput primary = forecasts.stream().filter(f -> f.horizonTradingSessions() == 5)
+					.findFirst().orElseThrow(() -> new IllegalStateException("Five-session forecast is missing"));
 			return new LlmForecastCall(primary.asForecastOutput(), responseModel, allIn, allOut, allTotal,
 					forecasts, interactions);
 		}
@@ -174,13 +177,13 @@ public class OpenAiResponsesLlmForecastClient implements LlmForecastClient {
 		body.put("tools", toolDefinitions(webCallsUsed, maxWebSearchCalls)); body.put("tool_choice", "auto");
 		int remainingWebCalls = Math.max(0, maxWebSearchCalls - webCallsUsed);
 		if (remainingWebCalls > 0) body.put("max_tool_calls", remainingWebCalls);
-		body.put("text", Map.of("format", Map.of("type", "json_schema", "name", "stock_forecasts",
+		body.put("text", Map.of("format", Map.of("type", "json_schema", "name", "stock_forecast",
 				"strict", true, "schema", outputSchema())));
 		body.put("include", List.of("web_search_call.action.sources", "reasoning.encrypted_content"));
 		body.put("store", false);
-		String value = rest.post().uri("/responses")
+		String value = requests.openAi("forecast", () -> rest.post().uri("/responses")
 				.header(HttpHeaders.AUTHORIZATION, "Bearer " + properties.getWebResearch().getApiKey())
-				.contentType(MediaType.APPLICATION_JSON).body(body).retrieve().body(String.class);
+				.contentType(MediaType.APPLICATION_JSON).body(body).retrieve().body(String.class));
 		if (!text(value)) throw new IllegalStateException("OpenAI returned an empty response");
 		try { return mapper.readTree(value); } catch (JacksonException ex) { throw new IllegalStateException("Invalid OpenAI JSON", ex); }
 	}
@@ -217,7 +220,7 @@ public class OpenAiResponsesLlmForecastClient implements LlmForecastClient {
 	private Map<String, Object> outputSchema() {
 		Map<String, Object> strings = Map.of("type", "array", "items", Map.of("type", "string"));
 		Map<String, Object> item = new LinkedHashMap<>(); item.put("type", "object");
-		item.put("properties", Map.of("horizonTradingSessions", Map.of("type", "integer", "enum", List.of(1, 5)),
+		item.put("properties", Map.of("horizonTradingSessions", Map.of("type", "integer", "enum", List.of(5)),
 				"upScore", Map.of("type", "integer", "minimum", 0, "maximum", 100), "confidence", Map.of("type", "string",
 						"enum", List.of("LOW", "MEDIUM", "HIGH")), "thesis", Map.of("type", "string"),
 				"upsideTouchScore", Map.of("type", "integer", "minimum", 0, "maximum", 100),
@@ -227,7 +230,7 @@ public class OpenAiResponsesLlmForecastClient implements LlmForecastClient {
 				"confidence", "thesis", "bullishEvidence", "bearishEvidence", "risks", "dataLimitations"));
 		item.put("additionalProperties", false);
 		return Map.of("type", "object", "properties", Map.of("forecasts", Map.of("type", "array", "items", item,
-				"minItems", 2, "maxItems", 2)), "required", List.of("forecasts"), "additionalProperties", false);
+				"minItems", 1, "maxItems", 1)), "required", List.of("forecasts"), "additionalProperties", false);
 	}
 
 	private String description(String name) { return switch (name) {

@@ -9,6 +9,7 @@ import com.stock.analyzer.api.error.ApiException;
 import com.stock.analyzer.instrument.application.InstrumentReferenceProvider;
 import com.stock.analyzer.instrument.domain.InstrumentProfile;
 import com.stock.analyzer.provider.ExternalApiErrorLogger;
+import com.stock.analyzer.provider.ExternalRequestExecutor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,17 +31,25 @@ public class SharadarInstrumentReferenceProvider implements InstrumentReferenceP
 	private final SharadarProperties properties;
 	private final ObjectMapper objectMapper;
 	private final RestClient restClient;
+	private final ExternalRequestExecutor requests;
 
 	@Autowired
-	public SharadarInstrumentReferenceProvider(SharadarProperties properties, ObjectMapper objectMapper) {
-		this(properties, objectMapper, RestClient.create(properties.getBaseUrl().toString()));
+	public SharadarInstrumentReferenceProvider(SharadarProperties properties, ObjectMapper objectMapper,
+			ExternalRequestExecutor requests) {
+		this(properties, objectMapper, RestClient.create(properties.getBaseUrl().toString()), requests);
 	}
 
 	SharadarInstrumentReferenceProvider(SharadarProperties properties, ObjectMapper objectMapper,
 			RestClient restClient) {
+		this(properties, objectMapper, restClient, null);
+	}
+
+	private SharadarInstrumentReferenceProvider(SharadarProperties properties, ObjectMapper objectMapper,
+			RestClient restClient, ExternalRequestExecutor requests) {
 		this.properties = properties;
 		this.objectMapper = objectMapper;
 		this.restClient = restClient;
+		this.requests = requests;
 	}
 
 	@Override
@@ -51,7 +60,7 @@ public class SharadarInstrumentReferenceProvider implements InstrumentReferenceP
 		}
 
 		try {
-			SharadarTickerResponse response = restClient.get()
+			SharadarTickerResponse response = request(() -> restClient.get()
 					.uri(uriBuilder -> uriBuilder
 							.path("/data/tickers")
 							.queryParam("format", "json")
@@ -59,7 +68,7 @@ public class SharadarInstrumentReferenceProvider implements InstrumentReferenceP
 							.build())
 					.header("x-api-key", properties.getApiKey())
 					.retrieve()
-					.body(SharadarTickerResponse.class);
+					.body(SharadarTickerResponse.class));
 
 			if (response == null || response.data() == null || response.data().isEmpty()) {
 				return Optional.empty();
@@ -78,6 +87,10 @@ public class SharadarInstrumentReferenceProvider implements InstrumentReferenceP
 			throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "SHARADAR_UNAVAILABLE",
 					"Sharadar could not be reached");
 		}
+	}
+
+	private <T> T request(java.util.function.Supplier<T> request) {
+		return requests == null ? request.get() : requests.sharadar("instrument_resolution", request);
 	}
 
 	private Optional<SharadarTickerResponse.SharadarTickerRow> chooseSecurityMasterRow(

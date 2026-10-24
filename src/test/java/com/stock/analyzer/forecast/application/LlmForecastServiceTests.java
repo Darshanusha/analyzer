@@ -54,7 +54,7 @@ class LlmForecastServiceTests {
 				"test-model-snapshot", 100L, 50L, 150L));
 
 		LlmForecastResult result = service.forecast(UUID.randomUUID(), instrument(),
-				LocalDate.of(2026, 10, 2), LocalDate.of(2026, 10, 5), "LIMITED", components());
+				LocalDate.of(2026, 10, 2), "LIMITED", components());
 
 		assertThat(result.status()).isEqualTo("AVAILABLE");
 		assertThat(result.direction()).isEqualTo("UP");
@@ -64,6 +64,8 @@ class LlmForecastServiceTests {
 		assertThat(result.touchScoreSpread()).isEqualTo(45);
 		assertThat(result.upsideThresholdPercent()).isEqualTo(2.0);
 		assertThat(result.downsideThresholdPercent()).isEqualTo(2.0);
+		assertThat(result.horizonTradingSessions()).isEqualTo(5);
+		assertThat(result.targetSession()).isEqualTo(LocalDate.of(2026, 10, 9));
 		assertThat(result.scoreInterpretation()).contains("NOT_PROBABILITIES");
 		assertThat(result.model()).isEqualTo("test-model-snapshot");
 		verify(repository).resolveOutcomes(instrument().id());
@@ -81,7 +83,7 @@ class LlmForecastServiceTests {
 				gapRepository, disabled, new ObjectMapper(), new SimpleMeterRegistry(), clock);
 
 		LlmForecastResult result = disabledService.forecast(UUID.randomUUID(), instrument(),
-				LocalDate.of(2026, 10, 2), LocalDate.of(2026, 10, 5), "GOOD", components());
+				LocalDate.of(2026, 10, 2), "GOOD", components());
 
 		assertThat(result.status()).isEqualTo("DISABLED");
 		assertThat(result.upScore()).isNull();
@@ -95,7 +97,7 @@ class LlmForecastServiceTests {
 		when(client.configuredModel()).thenReturn("test-model");
 
 		LlmForecastResult result = service.forecast(UUID.randomUUID(), instrument(),
-				LocalDate.of(2026, 10, 2), LocalDate.of(2026, 10, 5), "GOOD", components(), true);
+				LocalDate.of(2026, 10, 2), "GOOD", components(), true);
 
 		assertThat(result.status()).isEqualTo("FILTERED_OUT");
 		assertThat(result.errorCode()).isEqualTo("JAVA_CANDIDATE_FILTER");
@@ -113,7 +115,7 @@ class LlmForecastServiceTests {
 				"test-model", 10L, 10L, 20L));
 
 		LlmForecastResult result = service.forecast(UUID.randomUUID(), instrument(),
-				LocalDate.of(2026, 10, 2), LocalDate.of(2026, 10, 5), "GOOD", components());
+				LocalDate.of(2026, 10, 2), "GOOD", components());
 
 		assertThat(result.status()).isEqualTo("FAILED");
 		assertThat(result.errorCode()).isEqualTo("IllegalArgumentException");
@@ -133,7 +135,7 @@ class LlmForecastServiceTests {
 				"test-model", 10L, 10L, 20L));
 
 		LlmForecastResult result = service.forecast(UUID.randomUUID(), instrument(),
-				LocalDate.of(2026, 10, 2), LocalDate.of(2026, 10, 5), "GOOD", components());
+				LocalDate.of(2026, 10, 2), "GOOD", components());
 
 		assertThat(result.status()).isEqualTo("AVAILABLE");
 		assertThat(result.dataLimitations()).anyMatch(value -> value.contains("Thirty-day implied volatility"));
@@ -164,7 +166,7 @@ class LlmForecastServiceTests {
 				5L, 5L, 10L, 25L, null, null));
 
 		LlmForecastResult result = service.forecast(UUID.randomUUID(), instrument(),
-				LocalDate.of(2026, 10, 2), LocalDate.of(2026, 10, 5), "GOOD", components());
+				LocalDate.of(2026, 10, 2), "GOOD", components());
 
 		assertThat(result.upScore()).isEqualTo(61);
 		assertThat(result.inputTokens()).isEqualTo(30L);

@@ -3,6 +3,7 @@ package com.stock.analyzer.provider.sharadar;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 import com.stock.analyzer.api.error.ApiException;
 import com.stock.analyzer.fundamental.application.FundamentalDataProvider;
@@ -12,6 +13,7 @@ import com.stock.analyzer.marketdata.application.MarketDataProvider;
 import com.stock.analyzer.marketdata.domain.CorporateAction;
 import com.stock.analyzer.marketdata.domain.DailyPriceBar;
 import com.stock.analyzer.provider.ExternalApiErrorLogger;
+import com.stock.analyzer.provider.ExternalRequestExecutor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,16 +35,24 @@ public class SharadarHistoricalDataProvider
 	private final SharadarProperties properties;
 	private final ObjectMapper objectMapper;
 	private final RestClient restClient;
+	private final ExternalRequestExecutor requests;
 
 	@Autowired
-	public SharadarHistoricalDataProvider(SharadarProperties properties, ObjectMapper objectMapper) {
-		this(properties, objectMapper, RestClient.create(properties.getBaseUrl().toString()));
+	public SharadarHistoricalDataProvider(SharadarProperties properties, ObjectMapper objectMapper,
+			ExternalRequestExecutor requests) {
+		this(properties, objectMapper, RestClient.create(properties.getBaseUrl().toString()), requests);
 	}
 
 	SharadarHistoricalDataProvider(SharadarProperties properties, ObjectMapper objectMapper, RestClient restClient) {
+		this(properties, objectMapper, restClient, null);
+	}
+
+	private SharadarHistoricalDataProvider(SharadarProperties properties, ObjectMapper objectMapper,
+			RestClient restClient, ExternalRequestExecutor requests) {
 		this.properties = properties;
 		this.objectMapper = objectMapper;
 		this.restClient = restClient;
+		this.requests = requests;
 	}
 
 	@Override
@@ -50,13 +60,13 @@ public class SharadarHistoricalDataProvider
 		ensureConfigured();
 		String table = priceTable(providerEntityType);
 		try {
-			SharadarMarketDataResponse response = restClient.get()
+			SharadarMarketDataResponse response = request(table + "_prices", () -> restClient.get()
 					.uri(builder -> builder.path("/data/").path(table)
 							.queryParam("format", "json").queryParam("ticker", symbol)
 							.queryParam("from", from).queryParam("to", to).queryParam("sort", "date.asc")
 							.build())
 					.header("x-api-key", properties.getApiKey()).retrieve()
-					.body(SharadarMarketDataResponse.class);
+					.body(SharadarMarketDataResponse.class));
 			return response == null || response.data() == null ? List.of() : response.data().stream()
 					.filter(row -> row.date() != null)
 					.map(row -> new DailyPriceBar(row.date(), row.open(), row.high(), row.low(), row.close(),
@@ -86,12 +96,12 @@ public class SharadarHistoricalDataProvider
 	public List<FinancialReport> fetchReports(String symbol, LocalDate from) {
 		ensureConfigured();
 		try {
-			SharadarFundamentalResponse response = restClient.get()
+			SharadarFundamentalResponse response = request("fundamentals", () -> restClient.get()
 					.uri(builder -> builder.path("/data/fundamentals")
 							.queryParam("format", "json").queryParam("ticker", symbol)
 							.queryParam("from", from).queryParam("sort", "date.asc").build())
 					.header("x-api-key", properties.getApiKey()).retrieve()
-					.body(SharadarFundamentalResponse.class);
+					.body(SharadarFundamentalResponse.class));
 			return response == null || response.data() == null ? List.of() : response.data().stream()
 					.filter(row -> row.date() != null && row.reportperiod() != null && row.dimension() != null)
 					.map(this::toFinancialReport).toList();
@@ -107,12 +117,12 @@ public class SharadarHistoricalDataProvider
 	public List<CorporateAction> fetchActions(String symbol, LocalDate from, LocalDate to) {
 		ensureConfigured();
 		try {
-			SharadarActionResponse response = restClient.get()
+			SharadarActionResponse response = request("actions", () -> restClient.get()
 					.uri(builder -> builder.path("/data/actions")
 							.queryParam("format", "json").queryParam("ticker", symbol)
 							.queryParam("from", from).queryParam("to", to).queryParam("sort", "date.asc")
 							.build())
-					.header("x-api-key", properties.getApiKey()).retrieve().body(SharadarActionResponse.class);
+					.header("x-api-key", properties.getApiKey()).retrieve().body(SharadarActionResponse.class));
 			return response == null || response.data() == null ? List.of() : response.data().stream()
 					.filter(row -> row.date() != null && row.action() != null)
 					.map(row -> new CorporateAction(row.date(), row.action(), row.name(), row.value(),
@@ -133,6 +143,10 @@ public class SharadarHistoricalDataProvider
 				row.cashneq(), row.debt(), row.shareswadil(), row.epsdil(), row.grossmargin(), row.netmargin(),
 				row.roe(), row.roa(), row.roic(), row.currentratio(), row.de(), row.pe(), row.evebitda(), row.ps(),
 				row.marketcap(), objectMapper.convertValue(row, RAW_TYPE));
+	}
+
+	private <T> T request(String operation, Supplier<T> request) {
+		return requests == null ? request.get() : requests.sharadar(operation, request);
 	}
 
 	private void ensureConfigured() {
