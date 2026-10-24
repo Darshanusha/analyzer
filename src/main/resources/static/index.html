@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Personal dashboard for the AI Stock Market Analyzer">
+    <title>Stock Analyzer</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="hero">
+    <div>
+        <p class="eyebrow">PERSONAL RESEARCH WORKSPACE</p>
+        <h1>Stock Analyzer</h1>
+        <p class="subtitle">Run evidence-based five-session analyses and inspect every stage.</p>
+    </div>
+    <div class="runtime-controls">
+        <label class="poll-control" for="pollIntervalSeconds">
+            Poll every
+            <span><input id="pollIntervalSeconds" type="number" min="5" max="300" step="1" value="30"> seconds</span>
+        </label>
+        <div class="connection" id="connectionState"><span></span> API ready</div>
+    </div>
+</header>
+
+<main>
+    <section class="card single-card" aria-labelledby="single-title">
+        <div class="section-heading">
+            <div>
+                <p class="step">01 · SINGLE STOCK</p>
+                <h2 id="single-title">Analyze one symbol</h2>
+            </div>
+            <p>Fetch missing market data, run deterministic analysis, then request the five-session LLM forecast.</p>
+        </div>
+        <form id="singleForm" class="inline-form">
+            <label>
+                Symbol
+                <input id="symbol" name="symbol" required maxlength="15" placeholder="AAPL" autocomplete="off">
+            </label>
+            <label class="check"><input id="singleFilter" type="checkbox" checked> Apply Java filter</label>
+            <label class="check"><input id="singleForce" type="checkbox"> Force reanalysis</label>
+            <button type="submit">Run analysis</button>
+        </form>
+        <div id="singleResult" class="result-panel hidden" aria-live="polite"></div>
+    </section>
+
+    <section class="card" aria-labelledby="batch-title">
+        <div class="section-heading">
+            <div>
+                <p class="step">02 · BATCH</p>
+                <h2 id="batch-title">Upload a symbol list</h2>
+            </div>
+            <p>The CSV must contain one column named <code>symbol</code>, with up to 600 unique symbols.</p>
+        </div>
+        <form id="batchForm" class="upload-form">
+            <label class="file-drop" id="fileDrop">
+                <input id="csvFile" name="file" type="file" accept=".csv,text/csv" required>
+                <span class="file-icon">CSV</span>
+                <span><strong id="fileLabel">Choose a CSV file</strong><small>or drop it here</small></span>
+            </label>
+            <div class="batch-options">
+                <label class="check"><input id="batchFilter" type="checkbox" checked> Apply Java filter</label>
+                <label class="check"><input id="batchForce" type="checkbox"> Force reanalysis</label>
+                <button type="submit">Start batch</button>
+            </div>
+        </form>
+    </section>
+
+    <section id="batchWorkspace" class="card hidden" aria-labelledby="progress-title">
+        <div class="section-heading compact">
+            <div>
+                <p class="step">03 · PROGRESS</p>
+                <h2 id="progress-title">Batch execution</h2>
+            </div>
+            <div class="actions">
+                <button id="refreshBatch" class="secondary" type="button">Refresh</button>
+                <button id="retryFailed" class="secondary danger hidden" type="button">Retry failed</button>
+            </div>
+        </div>
+        <p class="identifier">Batch ID: <button id="copyBatchId" class="copy-value" type="button"></button></p>
+        <div class="progress-track"><div id="progressBar"></div></div>
+        <div class="stats">
+            <article><span id="batchStatus" class="status">—</span><small>Status</small></article>
+            <article><strong id="completedCount">0 / 0</strong><small>Completed</small></article>
+            <article><strong id="successCount">0</strong><small>Successful</small></article>
+            <article><strong id="failedCount">0</strong><small>Failed</small></article>
+        </div>
+        <details>
+            <summary>Batch items and errors</summary>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>Symbol</th><th>Status</th><th>LLM</th><th>Error</th></tr></thead>
+                    <tbody id="batchItems"></tbody>
+                </table>
+            </div>
+        </details>
+    </section>
+
+    <section id="resultsWorkspace" class="card hidden" aria-labelledby="rankings-title">
+        <div class="section-heading compact">
+            <div>
+                <p class="step">04 · RESULTS</p>
+                <h2 id="rankings-title">Five-session ranking</h2>
+            </div>
+            <div class="actions">
+                <button id="toggleRankings" class="secondary icon-button" type="button"
+                        aria-expanded="true" aria-controls="rankingsList" title="Collapse stock rankings">
+                    <span aria-hidden="true">▾</span><span class="sr-only">Collapse stock rankings</span>
+                </button>
+                <button id="loadRankings" class="secondary" type="button">Load rankings</button>
+                <button id="runSelection" type="button">Select top candidates</button>
+            </div>
+        </div>
+        <p class="notice">Scores are uncalibrated research estimates, not probabilities or recommendations to trade.</p>
+        <div id="rankingsList" class="table-wrap">
+            <table>
+                <thead>
+                <tr><th>Rank</th><th>Symbol</th><th>+ target</th><th>− target</th><th>Spread</th><th>Confidence</th><th>Target date</th></tr>
+                </thead>
+                <tbody id="rankings"></tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="selectionWorkspace" class="card hidden" aria-labelledby="selection-title">
+        <div class="section-heading compact">
+            <div>
+                <p class="step">05 · COMPARATIVE REVIEW</p>
+                <h2 id="selection-title">Selected candidates</h2>
+            </div>
+            <button id="refreshSelection" class="secondary" type="button">Refresh</button>
+        </div>
+        <p class="identifier">Selection ID: <button id="copySelectionId" class="copy-value" type="button"></button></p>
+        <div id="selectionSummary" class="selection-summary"></div>
+        <div id="selectedCandidates" class="candidate-grid"></div>
+    </section>
+
+    <div id="toast" role="status" aria-live="polite"></div>
+</main>
+
+<footer>Personal research only · Verify every result independently</footer>
+<script src="/app.js" defer></script>
+</body>
+</html>

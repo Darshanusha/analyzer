@@ -81,6 +81,8 @@ public class LlmSelectionService {
 					selectionLimit, properties.getModel(), selectionPromptIdentity);
 			if (reusable.isPresent()) {
 				LlmSelectionState state = withReuse(reusable.get(), true);
+				log.info("Reusing LLM candidate selection: selectionId={}, batchId={}, status={}, horizon={}",
+						state.selectionId(), batchAnalysisId, state.status(), horizonTradingSessions);
 				return new LlmSelectionSubmission(state.selectionId(), CompletableFuture.completedFuture(state), true);
 			}
 		}
@@ -99,6 +101,9 @@ public class LlmSelectionService {
 		UUID selectionId = repository.create(batchAnalysisId, horizonTradingSessions, candidateLimit,
 				selectionLimit, properties.getModel(), selectionPromptIdentity, touchTarget.getUpsidePercent(),
 				touchTarget.getDownsidePercent());
+		log.info("LLM candidate selection queued: selectionId={}, batchId={}, availableCandidates={}, "
+				+ "candidateLimit={}, selectionLimit={}, horizon={}, model={}", selectionId, batchAnalysisId,
+				available.size(), candidateLimit, selectionLimit, horizonTradingSessions, properties.getModel());
 		CompletableFuture<LlmSelectionState> completion = CompletableFuture.supplyAsync(
 				() -> execute(selectionId, batchAnalysisId, horizonTradingSessions, candidateLimit, selectionLimit),
 				executor);
@@ -114,6 +119,8 @@ public class LlmSelectionService {
 			int candidateLimit, int selectionLimit) {
 		long started = System.nanoTime();
 		repository.markRunning(selectionId);
+		log.info("LLM candidate selection started: selectionId={}, batchId={}, horizon={}",
+				selectionId, batchAnalysisId, horizon);
 		try {
 			List<LlmSelectionCandidateInput> candidates = repository.loadCandidates(batchAnalysisId, horizon,
 					candidateLimit, touchTarget.getUpsidePercent(), touchTarget.getDownsidePercent());
@@ -121,7 +128,14 @@ public class LlmSelectionService {
 				throw new IllegalStateException("Available candidate count fell below the configured selection limit");
 			}
 			Map<String, Object> snapshot = inputSnapshot(batchAnalysisId, horizon, selectionLimit, candidates);
+			log.info("Calling OpenAI for LLM candidate selection: selectionId={}, batchId={}, candidates={}, "
+					+ "selectionLimit={}, webResearchEnabled={}", selectionId, batchAnalysisId, candidates.size(),
+					selectionLimit, properties.isWebResearchEnabled());
 			var call = client.select(snapshot, candidates, selectionLimit);
+			log.info("OpenAI response received for LLM candidate selection: selectionId={}, model={}, "
+					+ "inputTokens={}, outputTokens={}, toolCalls={}", selectionId, call.model(), call.inputTokens(),
+					call.outputTokens(), call.interactions().stream()
+							.mapToInt(interaction -> interaction.toolCallCount()).sum());
 			String inputHash = sha256(json(call.inputSnapshot()));
 			List<LlmSelectionCandidateResult> results = validateAndMerge(candidates, call.output(), selectionLimit);
 			long duration = elapsed(started);

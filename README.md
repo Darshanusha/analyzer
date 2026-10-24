@@ -1,5 +1,14 @@
 # AI Stock Market Analyzer
 
+## Personal web dashboard
+
+Start the Spring Boot application and open [http://localhost:8080](http://localhost:8080). The lightweight dashboard is
+served by the same application and requires no separate Node.js process. It supports single-stock analysis, multipart
+CSV batch submission, progress polling, failed-item retry, five-session rankings, and second-level LLM selection.
+
+The page intentionally remains a research interface: its scores are uncalibrated estimates and are not trading
+recommendations.
+
 An explainable, AI-assisted U.S. stock analysis application built with Java, Spring Boot, Spring AI, PostgreSQL, and Docker.
 
 The application combines deterministic financial calculations, technical analysis, peer/sector context, market conditions,
